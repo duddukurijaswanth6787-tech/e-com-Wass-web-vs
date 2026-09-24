@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const baseUrl = "https://vasanthissignature.in";
+  const baseUrl = "https://vswaas-web.vercel.app";
 
   return [
     {

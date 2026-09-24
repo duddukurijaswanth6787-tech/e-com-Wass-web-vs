@@ -85,9 +85,8 @@ export default async function RootLayout({
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "WebSite",
-    "name": "Vasanthi's Signature",
-    "alternateName": ["vasanthissignature", "Vasanthi Signature"],
-    "url": "https://vasanthissignature.in",
+    "name": "VSWAAS Boutique",
+    "url": "https://vswaas-web.vercel.app",
   };
 
   return (
