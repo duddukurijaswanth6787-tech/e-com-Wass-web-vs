@@ -8,6 +8,7 @@ import { AuthProvider } from "@/lib/auth/AuthContext";
 import { prefetchStorefrontData } from "@/lib/query/prefetch";
 import { fetchThemeCss } from "@/lib/theme/server-theme";
 import { GlobalErrorListener } from "@/components/common/GlobalErrorListener";
+import { BoutiqueSdkLoader } from "@/components/common/BoutiqueSdkLoader";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -115,32 +116,13 @@ export default async function RootLayout({
             dangerouslySetInnerHTML={{ __html: themeCss }}
           />
         )}
-        <Script
-          id="boutique-master-sdk"
-          src={process.env.NEXT_PUBLIC_SAAS_SDK_URL || "https://api.vasanthissignature.in/sdk/v1/boutique-sdk.min.js"}
-          strategy="lazyOnload"
-          onLoad={() => {
-            if (typeof window !== "undefined" && (window as any).BoutiqueSDK) {
-              (window as any).boutique = new (window as any).BoutiqueSDK({
-                clientId: "cl_hyd_vasanticreat_3ab4d8",
-                publicKey: "pk_live_52996adda36429e6aa48d824dbdf44ca",
-                secretKey: "sk_live_" + "c6328a1f8448453dcb9aaed6fc02d45ac5fed30ddce09c5d",
-                apiUrl: "https://api.vasanthissignature.in",
-                whatsappNumber: "919876543210",
-                debug: false
-              });
-            }
-          }}
-          onError={() => {
-            // Gracefully handle offline or blocked CDN script without throwing unhandled console errors
-            console.info("Boutique Master SDK: Cloud gateway running in standalone mode.");
-          }}
-        />
+
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable} min-h-full flex flex-col`} suppressHydrationWarning>
         <VDQueryProvider dehydratedState={dehydrate(queryClient)}>
           <AuthProvider>
             <GlobalErrorListener />
+            <BoutiqueSdkLoader />
             {children}
           </AuthProvider>
         </VDQueryProvider>
