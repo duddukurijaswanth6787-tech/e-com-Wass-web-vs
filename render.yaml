@@ -3,9 +3,9 @@ services:
   - type: web
     name: vswaas-backend
     runtime: node
-    plan: free
-    buildCommand: cd .. && npm install && npm run build:backend
-    startCommand: cd backend && npx prisma db push --accept-data-loss && node dist/src/main.js
+    rootDir: backend
+    buildCommand: npm install && npx prisma generate && node ./node_modules/@nestjs/cli/bin/nest.js build && node ./node_modules/tsc-alias/dist/bin/index.js
+    startCommand: node dist/src/main.js
     envVars:
       - key: NODE_ENV
         value: production
