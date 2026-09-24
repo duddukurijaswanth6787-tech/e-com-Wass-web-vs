@@ -11,6 +11,10 @@ export default async function Home() {
   const queryClient = new QueryClient();
 
   const fetchProducts = async (query: ProductQueryDto) => {
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL;
+    if (!apiBase) {
+      return { data: [], total: 0, items: [] };
+    }
     try {
       const result = await productService.findAll({
         isPublished: true,
@@ -27,6 +31,10 @@ export default async function Home() {
   };
 
   const fetchFeaturedCategories = async () => {
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL;
+    if (!apiBase) {
+      return [];
+    }
     try {
       const res = await categoryService.findFeatured();
       if (Array.isArray(res) && res.length > 0) return res;
