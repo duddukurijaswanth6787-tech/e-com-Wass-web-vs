@@ -1,0 +1,4402 @@
+'use client';
+
+import React, { useState, useMemo, useEffect, useCallback, useDeferredValue } from 'react';
+// Live scannable SKU barcode & QR sticker generator
+import { useForm, FormProvider, useWatch } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import Image from 'next/image';
+import { isLocalOrPlaceholder } from '@/lib/media-url';
+import { getApiErrorMessage } from '@/utils/api-error';
+import { preventNegativeKeys, preventNegativeScroll } from '@/utils/validators';
+import { productSchema, ProductFormValues, ProductResponse, AttributeType, CreateProductDto, UpdateProductDto } from '../product.types';
+import { productService } from '../product.service';
+import { variantService } from '@/features/catalog/variants/variant.service';
+import { useVariants } from '@/features/catalog/variants/variant.hooks';
+import { inventoryService } from '@/features/inventory/inventory.service';
+import { useInventoryList } from '@/features/inventory/inventory.hooks';
+import { getApiBaseUrl, getStoredAccessToken } from '@/lib/api/client';
+import { attributeService } from '@/features/catalog/attributes/attribute.service';
+import { useAttributes } from '@/features/catalog/attributes/attribute.hooks';
+import { useSizeCharts } from '@/features/catalog/size-charts/size-chart.hooks';
+import type { AttributeResponse } from '@/features/catalog/attributes/attribute.types';
+import { useBrands } from '@/features/catalog/brands/brand.hooks';
+import { useCategories } from '@/features/catalog/categories/category.hooks';
+import { AiContentAssistant } from '@/features/ai-prompts/AiContentAssistant';
+import { attributeVariableKey } from '@/features/ai-prompts/prompt-builder';
+import { useCoupons } from '@/features/coupons/coupon.hooks';
+import { couponService } from '@/features/coupons/coupon.service';
+import type { CouponResponse } from '@/features/coupons/coupon.types';
+import { useOffers } from '@/features/offers/offer.hooks';
+import { offerService } from '@/features/offers/offer.service';
+import type { OfferResponse } from '@/features/offers/offer.types';
+import { useBatchStickers } from '@/features/pos/pos.hooks';
+import { LabelSize, LABEL_SIZE_OPTIONS } from '@/features/pos/pos.types';
+import { generateCode128SvgDataUrl, generateQrCodeSvgDataUrl } from '@/utils/barcode-generator';
+import {
+  LiveDesktopProductPreview,
+  type ColorVariantGroup,
+  type LivePreviewData,
+} from './LiveDesktopProductPreview';
+import {
+  Package,
+  DollarSign,
+  Palette,
+  Ruler,
+  Tag,
+  Plus,
+  Trash2,
+  CheckCircle2,
+  Save,
+  Upload,
+  FolderTree,
+  X,
+  AlertTriangle,
+  ListChecks,
+  ChevronLeft,
+  ChevronRight,
+  Printer,
+  QrCode,
+  Store,
+  Globe,
+  Layers,
+  Sparkles,
+  Scissors,
+  Boxes,
+  Flame,
+} from 'lucide-react';
+
+interface ProductBuilderProps {
+  productId?: string;
+  initialData?: ProductResponse;
+  onSaveSuccess?: (id: string) => void;
+}
+
+const COLOR_PRESETS = [
+  { name: 'Maroon', hex: '#0284c7' },
+  { name: 'Emerald Green', hex: '#0E6251' },
+  { name: 'Royal Blue', hex: '#1B4F72' },
+  { name: 'Pastel Pink', hex: '#FADBD8' },
+  { name: 'Gold', hex: '#D4AF37' },
+  { name: 'Black', hex: '#1C2833' },
+  { name: 'Crimson Red', hex: '#900C3F' },
+  { name: 'Mustard Yellow', hex: '#D4AC0D' },
+];
+
+/** Shot types offered per image, stored as the media title. */
+const IMAGE_TYPES = ['Front', 'Back', 'Side', 'Detail', 'Fabric', 'Model', 'Size/Fit', 'Lifestyle'];
+
+const STANDARD_SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL', 'Free Size'];
+
+/** A variant the backend created on save, with the barcode it assigned. */
+interface IssuedVariant {
+  sku: string;
+  barcode?: string;
+  title: string;
+  stock: number;
+  price: number;
+}
+
+/** A scope that a product form is allowed to toggle from here without
+ *  clobbering a coupon/offer that's already scoped to categories or brands
+ *  elsewhere. */
+const isProductAttachable = (applicableTo?: string) =>
+  !applicableTo || ['GLOBAL', 'PRODUCT', 'PRODUCTS'].includes(applicableTo);
+
+interface PromoPreview {
+  finalPrice: number;
+  discountAmount: number;
+  note?: string;
+}
+
+/**
+ * Mirrors the real discount formulas in coupon.service.ts / offer.service.ts
+ * (percentage / flat / free-shipping, capped by maxDiscountAmount) so this
+ * preview never shows the admin a number checkout wouldn't actually give a
+ * customer.
+ */
+function computePromoPreview(
+  type: string,
+  value: number,
+  minOrderAmount: number | undefined,
+  maxDiscountAmount: number | undefined,
+  price: number,
+): PromoPreview {
+  if (type === 'FREE_SHIPPING') {
+    return { finalPrice: price, discountAmount: 0, note: 'Free shipping — the item price itself is unchanged.' };
+  }
+  let discount = type === 'FLAT' ? value : (price * value) / 100;
+  if (maxDiscountAmount) discount = Math.min(discount, maxDiscountAmount);
+  discount = Math.max(0, Math.min(discount, price));
+  const note =
+    minOrderAmount && price < minOrderAmount
+      ? `Only applies once the customer's cart totals at least ₹${minOrderAmount.toLocaleString('en-IN')}.`
+      : undefined;
+  return { finalPrice: Math.max(0, price - discount), discountAmount: discount, note };
+}
+
+/**
+ * Merges/removes a product's id from a coupon's or offer's applicableIds so
+ * it becomes (or stops being) restricted to specific products. Returns null
+ * when nothing actually needs to change on the server.
+ */
+function diffProductAttachment(
+  current: { applicableTo?: string; applicableIds?: string[] },
+  productId: string,
+  shouldAttach: boolean,
+): { applicableTo?: string; applicableIds: string[] } | null {
+  const ids = current.applicableIds ?? [];
+  const isAttached = ids.includes(productId);
+  if (isAttached === shouldAttach) return null;
+
+  const nextIds = shouldAttach
+    ? [...ids, productId]
+    : ids.filter((id) => id !== productId);
+
+  return {
+    applicableTo: nextIds.length > 0 ? 'PRODUCTS' : undefined,
+    applicableIds: nextIds,
+  };
+}
+
+const findAttributeBySlug = (attributes: AttributeResponse[], slug: string) =>
+  attributes.find((a) => a.slug === slug || a.name.toLowerCase() === slug);
+
+const findOption = (attribute: AttributeResponse | undefined, value: string) =>
+  attribute?.options?.find(
+    (o) => o.value.toLowerCase().trim() === value.toLowerCase().trim(),
+  );
+
+/** The AttributeOption id a color group must be keyed by, when one exists. */
+const findColorOptionId = (attributes: AttributeResponse[], colorName: string) =>
+  findOption(findAttributeBySlug(attributes, 'color'), colorName)?.id;
+
+/**
+ * Tag a variant with its Color and Size. A color or size that is not in the
+ * attribute registry is sent as free text, and a missing attribute is skipped —
+ * an untagged variant still carries its own SKU, barcode and stock.
+ */
+const buildVariantAttributeValues = (
+  attributes: AttributeResponse[],
+  color: string,
+  size: string,
+) => {
+  const entries: { attributeId: string; attributeOptionId?: string; value?: string }[] = [];
+
+  const push = (slug: string, value: string) => {
+    const attribute = findAttributeBySlug(attributes, slug);
+    if (!attribute) return;
+    const option = findOption(attribute, value);
+    entries.push(
+      option
+        ? { attributeId: attribute.id, attributeOptionId: option.id }
+        : { attributeId: attribute.id, value },
+    );
+  };
+
+  if (color) push('color', color);
+  if (size) push('size', size);
+  return entries;
+};
+
+/** Generates a distinct color abbreviation to avoid SKU collisions (e.g. "Color 1" -> "COL1", "Color 2" -> "COL2", "Navy Blue" -> "NBLU") */
+export const getColorCodeHelper = (colorName: string) => {
+  const clean = (colorName || 'Color 1').trim();
+  const numMatch = clean.match(/colou?r\s*(\d+)/i);
+  if (numMatch) {
+    return `COL${numMatch[1]}`;
+  }
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    const firstChar = words[0][0].toUpperCase();
+    const secondWord = words[1].toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 3);
+    return `${firstChar}${secondWord}`;
+  }
+  const code = clean.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (code.length <= 4) return code || 'COL';
+  return code.substring(0, 4);
+};
+
+/** Smart unique variant SKU generator */
+export const buildSmartVariantSku = (colorName: string, sizeName: string) => {
+  const colorCode = getColorCodeHelper(colorName);
+  const cleanSize = (sizeName || 'FREE-SIZE')
+    .toUpperCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^A-Z0-9-]/g, '');
+  return `${colorCode}-${cleanSize}`;
+};
+
+/** Visual badge styling for variant inventory status */
+export const stockStatus = (stock: number, minStock?: number) => {
+  if (stock <= 0) {
+    return { label: 'Out of Stock', className: 'bg-rose-50 text-rose-700 border-rose-200' };
+  }
+  if (minStock && stock <= minStock) {
+    return { label: 'Low Stock', className: 'bg-amber-50 text-amber-700 border-amber-200' };
+  }
+  return { label: 'In Stock', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+};
+
+export default function ProductBuilder({
+  productId,
+  initialData,
+  onSaveSuccess,
+}: ProductBuilderProps) {
+  const [activeTab, setActiveTab] = useState<
+    'basic' | 'organisation' | 'pricing' | 'colors' | 'sizes' | 'attributes' | 'seo' | 'barcodes'
+  >('basic');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [issuedVariants, setIssuedVariants] = useState<IssuedVariant[]>([]);
+  const [labelSize, setLabelSize] = useState<LabelSize>('SMALL');
+  const [labelQtyBySku, setLabelQtyBySku] = useState<Record<string, number>>({});
+  const [printingSku, setPrintingSku] = useState<string | null>(null);
+  const batchStickersMutation = useBatchStickers();
+
+  // Load Brands
+  const { data: brandsData } = useBrands({ limit: 100 });
+  const brands = useMemo(() => (Array.isArray(brandsData) ? brandsData : (brandsData as { data?: Array<{ id: string; name: string }> })?.data || []), [brandsData]);
+
+  // Coupons & offers this product can be attached to — created and managed
+  // entirely on the Coupons & Offers pages; this form only picks from what
+  // already exists there.
+  const { data: couponsData } = useCoupons({ limit: 100 });
+  const coupons: CouponResponse[] = useMemo(() => couponsData?.data ?? [], [couponsData]);
+  const { data: offersData } = useOffers({ limit: 100 });
+  const offers: OfferResponse[] = useMemo(() => offersData?.data ?? [], [offersData]);
+
+  const [selectedCouponIds, setSelectedCouponIds] = useState<string[]>([]);
+  const [selectedOfferIds, setSelectedOfferIds] = useState<string[]>([]);
+  const [promoSelectionInitialized, setPromoSelectionInitialized] = useState(false);
+
+  // Pre-check whichever coupons/offers already list this product once both
+  // the lists and the product being edited have loaded. Runs once — after
+  // that, the admin's own toggles are the source of truth for this session.
+  useEffect(() => {
+    if (promoSelectionInitialized) return;
+    if (!initialData?.id) return;
+    if (!couponsData || !offersData) return;
+    setSelectedCouponIds(coupons.filter((c) => c.applicableIds?.includes(initialData.id)).map((c) => c.id));
+    setSelectedOfferIds(offers.filter((o) => o.applicableIds?.includes(initialData.id)).map((o) => o.id));
+    setPromoSelectionInitialized(true);
+  }, [promoSelectionInitialized, initialData?.id, couponsData, offersData, coupons, offers]);
+
+  // Load the full category tree so a primary category and its sub-category can
+  // both be picked. useFeaturedCategories only returned the featured subset.
+  // CategoryQueryDto caps `limit` at 100 (@Max(100)) — requesting more fails
+  // validation outright, so this can never legitimately be higher.
+  const { data: categoriesData } = useCategories({ limit: 100 });
+  const categories = useMemo(
+    () => (Array.isArray(categoriesData) ? categoriesData : categoriesData?.data || []),
+    [categoriesData],
+  );
+  const rootCategories = useMemo(
+    () => categories.filter((c) => !c.parentId),
+    [categories],
+  );
+
+  // Dynamic attribute registry. Colour and Size drive the variant matrix, so
+  // they are configured on the Colours/Sizes tabs and hidden from this list.
+  const { data: attributeData } = useAttributes({ limit: 100 });
+  const productAttributes = useMemo(() => {
+    const rows = attributeData?.data ?? [];
+    return rows.filter((a) => a.slug !== 'color' && a.slug !== 'size');
+  }, [attributeData]);
+
+  // Form Setup
+  const methods = useForm<ProductFormValues>({
+    resolver: zodResolver(productSchema) as never,
+    defaultValues: {
+      name: initialData?.name || '',
+      brandId: initialData?.brandId || '',
+      basePrice: initialData?.basePrice || 0,
+      salePrice: initialData?.salePrice || undefined,
+      costPrice: initialData?.costPrice || undefined,
+      taxPercentage: initialData?.taxPercentage || 5,
+      taxInclusive: initialData?.taxInclusive ?? true,
+      shortDescription: initialData?.shortDescription || '',
+      description: initialData?.description || '',
+      type: initialData?.type || 'READYMADE',
+      gender: initialData?.gender || 'WOMEN',
+      ageGroup: initialData?.ageGroup || 'ADULTS',
+      season: initialData?.season || '',
+      status: initialData?.status || 'ACTIVE',
+      isNewArrival: initialData?.isNewArrival ?? false,
+      isBestSeller: initialData?.isBestSeller ?? false,
+      isFeatured: initialData?.isFeatured ?? false,
+      isTrending: initialData?.isTrending ?? false,
+      isLimitedStock: initialData?.isLimitedStock ?? false,
+      isFestivePick: initialData?.isFestivePick ?? false,
+      isExclusive: initialData?.isExclusive ?? false,
+      isOnlineOnly: initialData?.isOnlineOnly ?? false,
+      channel: (initialData?.channel as 'STORE' | 'ONLINE' | 'BOTH') || 'BOTH',
+      hsnCode: initialData?.hsnCode || '',
+      seoKeywords: initialData?.seoKeywords || '',
+      isPublished: initialData?.isPublished ?? true,
+    },
+  });
+
+  // brandId is a required UUID in the zod schema, so react-hook-form's
+  // handleSubmit silently refuses to call the submit handler at all while it's
+  // empty — no error is shown for it anywhere in this form, so the Save
+  // button would otherwise appear to just do nothing. The Brand field's own
+  // placeholder already promises "or default Vasanthi's Signature" if left
+  // unset, so make that actually happen: auto-select the seeded default brand
+  // once it loads, but only for a brand-new product with nothing chosen yet —
+  // never overwrite an existing product's real brand.
+  useEffect(() => {
+    if (initialData?.brandId) return;
+    if (methods.getValues('brandId')) return;
+    const defaultBrand = brands.find((b: { id: string; name: string }) => b.name === "Vasanthi's Signature");
+    if (defaultBrand) {
+      methods.setValue('brandId', defaultBrand.id, { shouldValidate: true });
+    }
+  }, [brands, initialData?.brandId, methods]);
+
+  // ── Category & organisation state ────────────────────────────────────────
+  const [primaryCategoryId, setPrimaryCategoryId] = useState(
+    initialData?.categories?.[0]?.categoryId ?? '',
+  );
+  const [subCategoryId, setSubCategoryId] = useState(
+    initialData?.categories?.[1]?.categoryId ?? '',
+  );
+
+  // Synchronize and correctly identify root category vs child sub-category on edit load
+  useEffect(() => {
+    if (!initialData?.categories?.length || !categories.length) return;
+    const assignedIds = initialData.categories.map((c) => c.categoryId);
+    const root = categories.find((c) => assignedIds.includes(c.id) && !c.parentId);
+    if (root) {
+      setPrimaryCategoryId(root.id);
+      const sub = categories.find((c) => assignedIds.includes(c.id) && c.parentId === root.id);
+      if (sub) {
+        setSubCategoryId(sub.id);
+      }
+    }
+  }, [categories, initialData?.categories]);
+
+  const [collections, setCollections] = useState<string[]>(initialData?.collections ?? []);
+  const [tags, setTags] = useState<string[]>(initialData?.tags ?? []);
+  const [occasion, setOccasion] = useState(initialData?.occasion ?? '');
+  const [tagInput, setTagInput] = useState('');
+  const [collectionInput, setCollectionInput] = useState('');
+
+  // Customer-facing storefront feature toggles
+  const [enableCustomTailoring, setEnableCustomTailoring] = useState<boolean>(() => {
+    return Boolean(
+      initialData?.tags?.includes('custom-tailoring') ||
+      initialData?.tags?.includes('custom-stitch') ||
+      initialData?.type === 'CUSTOM'
+    );
+  });
+
+  const [enableWholesalePricing, setEnableWholesalePricing] = useState<boolean>(() => {
+    return Boolean(
+      initialData?.tags?.includes('wholesale-pricing') ||
+      initialData?.tags?.includes('b2b') ||
+      (initialData?.wholesalePrice && Number(initialData.wholesalePrice) > 0)
+    );
+  });
+
+  useEffect(() => {
+    if (!initialData) return;
+    if (initialData.tags?.includes('custom-tailoring') || initialData.type === 'CUSTOM') {
+      setEnableCustomTailoring(true);
+    }
+    if (initialData.tags?.includes('wholesale-pricing') || initialData.tags?.includes('b2b') || (initialData.wholesalePrice && Number(initialData.wholesalePrice) > 0)) {
+      setEnableWholesalePricing(true);
+    }
+  }, [initialData]);
+
+  // attributeId -> chosen value, for the dynamic attribute registry.
+  const [attributeValues, setAttributeValues] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    for (const entry of initialData?.attributes ?? []) {
+      if (entry.value) initial[entry.attributeId] = entry.value;
+    }
+    return initial;
+  });
+
+  const setAttributeValue = (attributeId: string, value: string) =>
+    setAttributeValues((prev) => ({ ...prev, [attributeId]: value }));
+
+
+  // Reusable size charts — measurements are entered once per garment shape and
+  // attached here, rather than retyped on every product.
+  const { data: sizeChartData } = useSizeCharts({ limit: 100, status: 'ACTIVE' });
+  const sizeCharts = useMemo(() => sizeChartData?.data ?? [], [sizeChartData]);
+  const [sizeChartTemplateId, setSizeChartTemplateId] = useState(
+    initialData?.sizeChartTemplateId ?? '',
+  );
+  const selectedSizeChart = useMemo(
+    () => sizeCharts.find((chart) => chart.id === sizeChartTemplateId),
+    [sizeCharts, sizeChartTemplateId],
+  );
+
+  // Sub-categories are the children of whichever primary category is selected.
+  const subCategories = useMemo(
+    () => categories.filter((c) => c.parentId === primaryCategoryId),
+    [categories, primaryCategoryId],
+  );
+
+  const addTag = () => {
+    const value = tagInput.trim();
+    if (!value || tags.includes(value)) {
+      setTagInput('');
+      return;
+    }
+    setTags((prev) => [...prev, value]);
+    setTagInput('');
+  };
+
+  const addCollection = () => {
+    const value = collectionInput.trim();
+    if (!value || collections.includes(value)) {
+      setCollectionInput('');
+      return;
+    }
+    setCollections((prev) => [...prev, value]);
+    setCollectionInput('');
+  };
+
+  // Dedicated Storefront Product Card View Image state
+  const [productCardImageUrl, setProductCardImageUrl] = useState<string>(
+    () => ((initialData as unknown as Record<string, unknown>)?.productCardImageUrl as string) ||
+          (initialData?.images?.find((m) => m.isPrimary && m.mediaType !== 'FABRIC' && (m as any).title !== 'FABRIC_SWATCH')?.url) ||
+          initialData?.primaryImageUrl ||
+          ''
+  );
+
+  const setCardViewImage = (url: string, colorGroupId?: string) => {
+    setProductCardImageUrl(url);
+    if (colorGroupId) {
+      setColorGroups((prev) => {
+        const groupIdx = prev.findIndex((g) => g.id === colorGroupId);
+        if (groupIdx === -1) return prev;
+        const updated = prev.map((group) => {
+          if (group.id !== colorGroupId) return group;
+          const images = [...group.images];
+          const imgIdx = images.indexOf(url);
+          if (imgIdx > 0) {
+            const [picked] = images.splice(imgIdx, 1);
+            images.unshift(picked);
+          }
+          return { ...group, images };
+        });
+        const [primaryGroup] = updated.splice(groupIdx, 1);
+        return [primaryGroup, ...updated];
+      });
+    }
+  };
+
+  // Color Groups State (with Images & Sizes per Color)
+  const [colorGroups, setColorGroups] = useState<ColorVariantGroup[]>(() => {
+    if (!initialData) return [];
+
+    const images = initialData.images || [];
+    const variants = (initialData as unknown as { variants?: Array<{ id: string; title?: string; sku?: string; barcode?: string; availableQuantity?: number; priceOverride?: number; salePriceOverride?: number; costPrice?: number; attributeValues?: Array<{ value?: string; attributeName?: string; attribute?: { slug?: string } }> }> })?.variants || [];
+    const primaryUrl = initialData.primaryImageUrl;
+
+    // 1. Direct colorGroups on initialData if saved
+    const rawGroups = (initialData as unknown as Record<string, unknown>)?.colorGroups;
+    if (Array.isArray(rawGroups) && rawGroups.length > 0) {
+      return rawGroups.map((rg: any, idx: number) => {
+        if (rg.name && Array.isArray(rg.sizes) && rg.sizes.length > 0) {
+          return rg as ColorVariantGroup;
+        }
+
+        const cName = rg.label || rg.colorAttributeOption?.label || rg.colorAttributeOption?.value || rg.name || `Color ${idx + 1}`;
+        const swatch = rg.colorAttributeOption?.swatchImageUrl || rg.swatchImage || images.find((i) => (i.colorGroupId === rg.id || i.color?.toLowerCase() === cName.toLowerCase()) && (i.mediaType === 'FABRIC' || (i as any).title === 'FABRIC_SWATCH' || (i as any).title === 'Fabric'))?.url;
+
+        const groupMedia = images
+          .filter((i) => (i.colorGroupId === rg.id || i.color?.toLowerCase() === cName.toLowerCase()) && i.mediaType !== 'FABRIC' && (i as any).title !== 'FABRIC_SWATCH' && (i as any).title !== 'Fabric')
+          .map((i) => i.url);
+
+        if (rg.images && Array.isArray(rg.images)) {
+          rg.images.forEach((u: string) => {
+            if (u && !groupMedia.includes(u)) groupMedia.push(u);
+          });
+        }
+
+        // If there's only 1 color group, or if this is the first group and has missing images, attach all unassigned non-fabric images
+        if (rawGroups.length === 1) {
+          images
+            .filter((i) => i.mediaType !== 'FABRIC' && (i as any).title !== 'FABRIC_SWATCH' && (i as any).title !== 'Fabric')
+            .forEach((i) => {
+              if (i.url && !groupMedia.includes(i.url)) groupMedia.push(i.url);
+            });
+        } else if (idx === 0) {
+          images
+            .filter((i) => !i.colorGroupId && !i.color && i.mediaType !== 'FABRIC' && (i as any).title !== 'FABRIC_SWATCH' && (i as any).title !== 'Fabric')
+            .forEach((i) => {
+              if (i.url && !groupMedia.includes(i.url)) groupMedia.push(i.url);
+            });
+        }
+
+        if (groupMedia.length === 0 && primaryUrl) {
+          const isPrimaryFabric = images.find((i) => i.url === primaryUrl && (i.mediaType === 'FABRIC' || (i as any).title === 'FABRIC_SWATCH' || (i as any).title === 'Fabric'));
+          if (!isPrimaryFabric) groupMedia.push(primaryUrl);
+        }
+
+        const matchingVariants = variants.filter((v) => {
+          const colorAttr = v.attributeValues?.find(
+            (av) => av.attributeName?.toLowerCase() === 'color' || av.attribute?.slug === 'color'
+          )?.value?.toLowerCase().trim();
+          if (colorAttr) return colorAttr === cName.toLowerCase().trim();
+          const vTitle = (v.title || '').toLowerCase().trim();
+          if (vTitle.includes('/')) {
+            const parts = vTitle.split('/').map((s) => s.trim());
+            return parts[0] === cName.toLowerCase().trim() || vTitle.includes(cName.toLowerCase().trim());
+          }
+          return rawGroups.length === 1 || vTitle === cName.toLowerCase().trim();
+        });
+
+        const colorCode = getColorCodeHelper(cName);
+        let groupSizes = matchingVariants.map((v) => {
+          const sizeAttr = v.attributeValues?.find(
+            (av) => av.attributeName?.toLowerCase() === 'size' || av.attribute?.slug === 'size'
+          )?.value;
+          const parts = (v.title || '').split('/').map((s) => s.trim());
+          const sz = sizeAttr || (parts.length > 1 ? parts[1] : (v.title || 'Free Size'));
+          return {
+            size: sz,
+            stock: v.availableQuantity ?? 10,
+            price: v.priceOverride ? Number(v.priceOverride) : undefined,
+            salePrice: v.salePriceOverride ? Number(v.salePriceOverride) : undefined,
+            costPrice: v.costPrice ? Number(v.costPrice) : undefined,
+            available: true,
+            sku: v.sku || `${colorCode}-${sz}`,
+          };
+        });
+
+        if (groupSizes.length === 0) {
+          groupSizes = STANDARD_SIZES.map((sz) => ({
+            size: sz,
+            stock: 10,
+            price: undefined,
+            salePrice: undefined,
+            costPrice: undefined,
+            available: true,
+            sku: `${colorCode}-${sz}`,
+          }));
+        }
+
+        return {
+          id: rg.id || `col-${idx + 1}-${cName.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+          name: cName,
+          hex: rg.colorAttributeOption?.value?.startsWith('#') ? rg.colorAttributeOption.value : (idx === 0 ? '#e8c4b8' : '#1e3a8a'),
+          swatchImage: swatch,
+          images: Array.from(new Set(groupMedia)),
+          sizes: groupSizes,
+        };
+      });
+    }
+
+    // 2. Derive from initialData.images and initialData.variants when editing legacy product
+    const colorMap = new Map<string, { swatch?: string; images: string[]; id?: string }>();
+
+    images.forEach((img) => {
+      const cName = img.color || 'Color 1';
+      const isFabric = img.mediaType === 'FABRIC' || (img as any).title === 'FABRIC_SWATCH' || (img as any).title === 'Fabric';
+      const swatch = (img as unknown as { swatchUrl?: string }).swatchUrl || (isFabric ? img.url : undefined);
+      if (!colorMap.has(cName)) {
+        colorMap.set(cName, { swatch, images: [], id: img.colorGroupId });
+      } else {
+        const entry = colorMap.get(cName)!;
+        if (swatch && !entry.swatch) entry.swatch = swatch;
+        if (img.colorGroupId && !entry.id) entry.id = img.colorGroupId;
+      }
+      if (img.url && !isFabric) {
+        if (!colorMap.get(cName)!.images.includes(img.url)) {
+          colorMap.get(cName)!.images.push(img.url);
+        }
+      }
+    });
+
+    // Check variants for color attribute or title ("Color / Size")
+    variants.forEach((v) => {
+      let colorName = '';
+      if (v.attributeValues) {
+        const colorAttr = v.attributeValues.find(
+          (av) => av.attributeName?.toLowerCase() === 'color' || av.attribute?.slug === 'color'
+        );
+        if (colorAttr?.value) colorName = colorAttr.value;
+      }
+      if (!colorName && v.title && v.title.includes('/')) {
+        colorName = v.title.split('/')[0].trim();
+      }
+      if (colorName && !colorMap.has(colorName)) {
+        colorMap.set(colorName, { swatch: undefined, images: primaryUrl ? [primaryUrl] : [] });
+      }
+    });
+
+    if (colorMap.size === 0) {
+      const defaultImgs = images
+        .filter((i) => i.mediaType !== 'FABRIC' && (i as any).title !== 'FABRIC_SWATCH' && (i as any).title !== 'Fabric')
+        .map((i) => i.url)
+        .filter(Boolean);
+      const isPrimaryFabric = images.find((i) => i.url === primaryUrl && (i.mediaType === 'FABRIC' || (i as any).title === 'FABRIC_SWATCH' || (i as any).title === 'Fabric'));
+      if (primaryUrl && !defaultImgs.includes(primaryUrl) && !isPrimaryFabric) {
+        defaultImgs.unshift(primaryUrl);
+      }
+      colorMap.set('Color 1', { swatch: isPrimaryFabric ? primaryUrl : undefined, images: Array.from(new Set(defaultImgs)) });
+    }
+
+    const groups: ColorVariantGroup[] = [];
+    let idx = 1;
+    colorMap.forEach((data, cName) => {
+      const colorCode = getColorCodeHelper(cName);
+      const hasExistingVariants = variants.length > 0;
+      let groupSizes: Array<{ size: string; stock: number; available: boolean; sku: string }> = [];
+
+      if (hasExistingVariants) {
+        const matchingVariantsForColor = variants.filter((v) => {
+          const colorAttr = v.attributeValues?.find(
+            (av) => av.attributeName?.toLowerCase() === 'color' || av.attribute?.slug === 'color'
+          )?.value?.toLowerCase().trim();
+          if (colorAttr) return colorAttr === cName.toLowerCase().trim();
+
+          const vTitle = (v.title || '').toLowerCase().trim();
+          if (vTitle.includes('/')) {
+            const parts = vTitle.split('/').map((s) => s.trim());
+            return parts[0] ? parts[0] === cName.toLowerCase().trim() || vTitle.includes(cName.toLowerCase().trim()) : false;
+          }
+          return colorMap.size === 1 || vTitle === cName.toLowerCase().trim();
+        });
+
+        groupSizes = matchingVariantsForColor.map((v) => {
+          const sizeAttr = v.attributeValues?.find(
+            (av) => av.attributeName?.toLowerCase() === 'size' || av.attribute?.slug === 'size'
+          )?.value;
+          const parts = (v.title || '').split('/').map((s) => s.trim());
+          const sz = sizeAttr || (parts.length > 1 ? parts[1] : (v.title || 'Free Size'));
+          const pOverride = (v as any).priceOverride ? Number((v as any).priceOverride) : undefined;
+          const spOverride = (v as any).salePriceOverride ? Number((v as any).salePriceOverride) : undefined;
+          const cp = (v as any).costPrice ? Number((v as any).costPrice) : undefined;
+          return {
+            size: sz,
+            stock: (v as any).availableQuantity ?? 10,
+            price: pOverride,
+            salePrice: spOverride,
+            costPrice: cp,
+            available: true,
+            sku: v.sku || `${colorCode}-${sz}`,
+          };
+        });
+      }
+
+      if (groupSizes.length === 0) {
+        groupSizes = STANDARD_SIZES.map((sz) => ({
+          size: sz,
+          stock: 10,
+          price: undefined,
+          salePrice: undefined,
+          available: true,
+          sku: `${colorCode}-${sz}`,
+        }));
+      }
+
+      const cleanGroupImages = Array.from(new Set(data.images)).filter((u) => u !== data.swatch);
+      groups.push({
+        id: data.id || `col-${idx}-${cName.toLowerCase().replace(/[^a-z0-9]/g, '')}`,
+        name: cName,
+        hex: idx === 1 ? '#e8c4b8' : '#1e3a8a',
+        swatchImage: data.swatch,
+        images: cleanGroupImages.length > 0 ? cleanGroupImages : (primaryUrl && primaryUrl !== data.swatch ? [primaryUrl] : []),
+        sizes: groupSizes,
+      });
+      idx++;
+    });
+
+    return groups;
+  });
+
+  // Fetch existing product variants and live inventory when editing to reconstruct ONLY kept sizes with accurate stock
+  const { data: fetchedVariantsData } = useVariants(productId ? { productId, limit: 100 } : {});
+  const { data: inventoryListData } = useInventoryList({ limit: 100 });
+
+  const inventoryMap = useMemo(() => {
+    const map = new Map<string, { availableQuantity: number; minimumStock?: number; reorderLevel?: number }>();
+    (inventoryListData?.data || []).forEach((inv) => {
+      if (inv.variantId) {
+        map.set(inv.variantId, {
+          availableQuantity: inv.availableQuantity,
+          minimumStock: inv.minimumStock,
+          reorderLevel: inv.reorderLevel,
+        });
+      }
+    });
+    return map;
+  }, [inventoryListData]);
+
+  useEffect(() => {
+    if (!productId || !fetchedVariantsData?.data) return;
+    const variants = fetchedVariantsData.data;
+    if (variants.length === 0) return;
+
+    setColorGroups((prevGroups) => {
+      if (!prevGroups.length) return prevGroups;
+      return prevGroups.map((group) => {
+        const cName = group.name.toLowerCase().trim();
+        const matchingForColor = variants.filter((v) => {
+          const colorAttr = v.attributeValues?.find(
+            (av) => av.attributeName?.toLowerCase() === 'color'
+          )?.value?.toLowerCase().trim();
+          if (colorAttr) return colorAttr === cName;
+
+          const vTitle = (v.title || '').toLowerCase().trim();
+          if (vTitle.includes('/')) {
+            const parts = vTitle.split('/').map((s) => s.trim());
+            return parts[0] ? parts[0] === cName || vTitle.includes(cName) : false;
+          }
+          return prevGroups.length === 1 || vTitle === cName;
+        });
+
+        if (matchingForColor.length === 0) return group;
+
+        const colorCode = getColorCodeHelper(group.name);
+        const keptSizes = matchingForColor.map((v) => {
+          const sizeAttr = v.attributeValues?.find(
+            (av) => av.attributeName?.toLowerCase() === 'size'
+          )?.value;
+          const parts = (v.title || '').split('/').map((s) => s.trim());
+          const sz = sizeAttr || (parts.length > 1 ? parts[1] : (v.title || 'Free Size'));
+          const inv = inventoryMap.get(v.id);
+          const pOverride = v.priceOverride !== undefined && v.priceOverride !== null ? Number(v.priceOverride) : undefined;
+          const spOverride = v.salePriceOverride !== undefined && v.salePriceOverride !== null ? Number(v.salePriceOverride) : undefined;
+          const cp = v.costPrice !== undefined && v.costPrice !== null ? Number(v.costPrice) : undefined;
+
+          // Preserve any in-session size edits / toggles
+          const existingInState = group.sizes.find((s) => s.size.toLowerCase().trim() === sz.toLowerCase().trim());
+          const isAvail = existingInState ? existingInState.available : true;
+
+          return {
+            size: sz,
+            stock: existingInState?.stock ?? (inv?.availableQuantity ?? 10),
+            minStock: inv?.minimumStock ?? 5,
+            reorderLevel: inv?.reorderLevel ?? 10,
+            price: existingInState?.price ?? pOverride,
+            salePrice: existingInState?.salePrice ?? spOverride,
+            costPrice: existingInState?.costPrice ?? cp,
+            available: isAvail,
+            sku: v.sku || `${colorCode}-${sz}`,
+          };
+        });
+
+        return {
+          ...group,
+          sizes: keptSizes,
+        };
+      });
+    });
+  }, [productId, fetchedVariantsData, inventoryMap]);
+
+  // Auto-generate preview barcode stickers and QR codes from color groups and sizes
+  const generateBarcodeVariants = useCallback(() => {
+    const pName = (methods.getValues('name') || initialData?.name || 'Product').toString();
+    const pPrice = Number(
+      methods.getValues('salePrice') ||
+      methods.getValues('basePrice') ||
+      initialData?.salePrice ||
+      initialData?.basePrice ||
+      0
+    );
+
+    // Map existing barcodes from initialData & fetchedVariants so we PRESERVE existing labels
+    const existingVariantsList: Array<{ sku?: string; barcode?: string; title?: string }> = [
+      ...((initialData as any)?.variants || []),
+      ...(fetchedVariantsData?.data || []),
+    ];
+    const existingBarcodeMap = new Map<string, string>();
+    existingVariantsList.forEach((v) => {
+      const bCode = v.barcode || v.sku;
+      if (bCode) {
+        if (v.sku) existingBarcodeMap.set(v.sku.toLowerCase().trim(), bCode);
+        if (v.title) existingBarcodeMap.set(v.title.toLowerCase().trim(), bCode);
+      }
+    });
+
+    const generated: IssuedVariant[] = [];
+    colorGroups.forEach((group) => {
+      group.sizes.forEach((sizeRow) => {
+        // DO NOT show removed or unavailable sizes in barcode labels
+        if (!sizeRow.available) return;
+
+        const title = `${group.name} / ${sizeRow.size}`;
+        const sku = sizeRow.sku || buildSmartVariantSku(group.name, sizeRow.size);
+        const existingBarcode =
+          existingBarcodeMap.get(sku.toLowerCase().trim()) ||
+          existingBarcodeMap.get(title.toLowerCase().trim());
+
+        // Preserve existing assigned barcode; do not overwrite or change existing barcodes
+        const barcode = existingBarcode || sku.replace(/[^A-Z0-9]/gi, '');
+        const stock = Number(sizeRow.stock) || 10;
+        const price = sizeRow.price ? Number(sizeRow.price) : pPrice;
+        generated.push({
+          sku,
+          barcode,
+          title,
+          stock,
+          price,
+        });
+      });
+    });
+
+    setIssuedVariants(generated);
+    setLabelQtyBySku(
+      Object.fromEntries(generated.map((v) => [v.sku, Math.max(1, v.stock || 1)]))
+    );
+    return generated;
+  }, [colorGroups, initialData?.basePrice, initialData?.name, initialData?.salePrice, (initialData as any)?.variants, fetchedVariantsData?.data, methods]);
+
+  // Total active sizes count for instant tab badge
+  const totalActiveSizes = useMemo(() => {
+    return colorGroups.reduce((acc, g) => acc + g.sizes.filter((s) => s.available).length, 0);
+  }, [colorGroups]);
+
+  // Auto-populate barcode variants whenever Tab 8 is opened or active sizes change
+  useEffect(() => {
+    if (activeTab === 'barcodes' && totalActiveSizes > 0) {
+      generateBarcodeVariants();
+    }
+  }, [activeTab, totalActiveSizes, generateBarcodeVariants]);
+
+  const [activeColorTab, setActiveColorTab] = useState<string>(() => colorGroups[0]?.id || '');
+
+  // Auto-sync activeColorTab when colorGroups list changes or first group loads
+  useEffect(() => {
+    if (colorGroups.length > 0) {
+      if (!activeColorTab || !colorGroups.some((c) => c.id === activeColorTab)) {
+        setActiveColorTab(colorGroups[0].id);
+      }
+    } else {
+      setActiveColorTab('');
+    }
+  }, [colorGroups, activeColorTab]);
+
+  // Add New Color Group
+  const [newColorName, setNewColorName] = useState('');
+  const [newColorHex, setNewColorHex] = useState('#0284c7');
+  const [newColorSwatch, setNewColorSwatch] = useState<string | undefined>(undefined);
+  const [newColorImages, setNewColorImages] = useState<string[]>([]);
+
+  const addColorGroup = (name?: string, hex?: string, swatch?: string, initialImgs?: string[]) => {
+    const defaultName = `Color ${colorGroups.length + 1}`;
+    const cName = name || newColorName.trim() || defaultName;
+    const cHex = hex || newColorHex;
+    const cSwatch = swatch !== undefined ? swatch : newColorSwatch;
+    const cImages = initialImgs && initialImgs.length > 0 ? initialImgs : newColorImages;
+
+    const newId = `col-${Date.now()}-${cName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+    const newGroup: ColorVariantGroup = {
+      id: newId,
+      name: cName,
+      hex: cHex,
+      swatchImage: cSwatch,
+      images: cImages,
+      sizes: STANDARD_SIZES.map((sz) => ({
+        size: sz,
+        stock: 10,
+        available: true,
+        sku: buildSmartVariantSku(cName, sz),
+      })),
+    };
+
+    setColorGroups((prev) => [...prev, newGroup]);
+    setActiveColorTab(newId);
+    setNewColorName('');
+    setNewColorSwatch(undefined);
+    setNewColorImages([]);
+  };
+
+  const removeColorGroup = (id: string) => {
+    setColorGroups((prev) => {
+      const remaining = prev.filter((c) => c.id !== id);
+      if (activeColorTab === id && remaining.length > 0) {
+        setActiveColorTab(remaining[0].id);
+      }
+      return remaining;
+    });
+  };
+
+  // Size management within color groups
+  const [newSizeInput, setNewSizeInput] = useState('');
+
+  const toggleSizeAvailability = (colorGroupId: string, sizeName: string) => {
+    setColorGroups((prev) =>
+      prev.map((g) => {
+        if (g.id === colorGroupId) {
+          return {
+            ...g,
+            sizes: g.sizes.map((s) =>
+              s.size === sizeName ? { ...s, available: !s.available } : s
+            ),
+          };
+        }
+        return g;
+      })
+    );
+  };
+
+  const updateSizeField = (
+    colorGroupId: string,
+    sizeName: string,
+    field: 'sku' | 'minStock' | 'reorderLevel' | 'price' | 'salePrice' | 'costPrice',
+    value: string | number | undefined
+  ) => {
+    setColorGroups((prev) =>
+      prev.map((g) => {
+        if (g.id === colorGroupId) {
+          return {
+            ...g,
+            sizes: g.sizes.map((s) =>
+              s.size === sizeName ? { ...s, [field]: value } : s
+            ),
+          };
+        }
+        return g;
+      })
+    );
+  };
+
+  const applyPriceToAllSizes = (colorGroupId: string, targetPrice: number | undefined) => {
+    setColorGroups((prev) =>
+      prev.map((g) => {
+        if (g.id === colorGroupId) {
+          return {
+            ...g,
+            sizes: g.sizes.map((s) => ({
+              ...s,
+              price: targetPrice && targetPrice > 0 ? targetPrice : undefined,
+            })),
+          };
+        }
+        return g;
+      })
+    );
+  };
+
+  const applyPlusSizeIncrements = (colorGroupId: string, stepIncrement = 100) => {
+    const base = Number(methods.getValues('basePrice')) || 0;
+    setColorGroups((prev) =>
+      prev.map((g) => {
+        if (g.id === colorGroupId) {
+          return {
+            ...g,
+            sizes: g.sizes.map((s) => {
+              const sz = s.size.toUpperCase().trim();
+              let inc = 0;
+              if (['XXL', '2XL'].includes(sz)) inc = stepIncrement;
+              else if (['XXXL', '3XL'].includes(sz)) inc = stepIncrement * 2;
+              else if (['4XL'].includes(sz)) inc = stepIncrement * 3;
+              else if (['5XL'].includes(sz)) inc = stepIncrement * 4;
+              if (inc > 0) {
+                return {
+                  ...s,
+                  price: (s.price && s.price > 0 ? s.price : base) + inc,
+                };
+              }
+              return s;
+            }),
+          };
+        }
+        return g;
+      })
+    );
+  };
+
+  const updateSizeStock = (colorGroupId: string, sizeName: string, stockVal: number) => {
+    setColorGroups((prev) =>
+      prev.map((g) => {
+        if (g.id === colorGroupId) {
+          return {
+            ...g,
+            sizes: g.sizes.map((s) =>
+              s.size === sizeName ? { ...s, stock: Math.max(0, isNaN(stockVal) ? 0 : stockVal) } : s
+            ),
+          };
+        }
+        return g;
+      })
+    );
+  };
+
+  const removeSizeFromColorGroup = (colorGroupId: string, sizeName: string) => {
+    setColorGroups((prev) =>
+      prev.map((g) => {
+        if (g.id === colorGroupId) {
+          return {
+            ...g,
+            sizes: g.sizes.filter((s) => s.size !== sizeName),
+          };
+        }
+        return g;
+      })
+    );
+  };
+
+  const addSizeToColorGroup = (colorGroupId: string) => {
+    const sizeToAdd = newSizeInput.trim().toUpperCase();
+    if (!sizeToAdd) return;
+    setColorGroups((prev) =>
+      prev.map((g) => {
+        if (g.id === colorGroupId) {
+          const exists = g.sizes.some(
+            (s) => s.size.toLowerCase().trim() === sizeToAdd.toLowerCase().trim()
+          );
+          if (exists) {
+            alert(`Size "${sizeToAdd}" already exists for "${g.name}".`);
+            return g;
+          }
+          return {
+            ...g,
+            sizes: [
+              ...g.sizes,
+              {
+                size: sizeToAdd,
+                stock: 10,
+                available: true,
+                sku: buildSmartVariantSku(g.name, sizeToAdd),
+              },
+            ],
+          };
+        }
+        return g;
+      })
+    );
+    setNewSizeInput('');
+  };
+
+  // Add Image URL to active color group
+  const [imageUrlInput, setImageUrlInput] = useState('');
+  const addImageToColorGroup = (colorGroupId: string, customUrl?: string) => {
+    const urlToAdd = (customUrl || imageUrlInput).trim();
+    if (!urlToAdd) return;
+    setColorGroups((prev) =>
+      prev.map((group) => {
+        if (group.id === colorGroupId) {
+          return {
+            ...group,
+            images: [...group.images, urlToAdd],
+          };
+        }
+        return group;
+      })
+    );
+    if (!customUrl) setImageUrlInput('');
+  };
+
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const [uploadingImageUrls, setUploadingImageUrls] = useState<Record<string, boolean>>({});
+
+  const handleLocalImageUpload = async (colorGroupId: string, files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const fileArray = Array.from(files);
+
+    // 1. Create local preview URLs for ALL uploaded files immediately
+    const fileEntries = fileArray.map((file) => ({
+      file,
+      localPreviewUrl: URL.createObjectURL(file),
+    }));
+
+    // 2. Instantly display ALL uploaded image previews in the UI (0ms latency)
+    const allPreviews = fileEntries.map((e) => e.localPreviewUrl);
+    setColorGroups((prev) =>
+      prev.map((group) => {
+        if (group.id === colorGroupId) {
+          return {
+            ...group,
+            images: [...group.images, ...allPreviews],
+          };
+        }
+        return group;
+      })
+    );
+
+    // 3. Mark all previews as actively uploading in parallel
+    setUploadingImageUrls((prev) => {
+      const next = { ...prev };
+      allPreviews.forEach((url) => {
+        next[url] = true;
+      });
+      return next;
+    });
+
+    // 4. Upload all images in parallel concurrently
+    await Promise.all(
+      fileEntries.map(async ({ file, localPreviewUrl }) => {
+        try {
+          const uploaded = await productService.uploadImage(file, file.name);
+          const serverUrl = uploaded.url;
+
+          // Seamlessly swap temporary preview URL with permanent uploaded server URL
+          setColorGroups((prev) =>
+            prev.map((group) => {
+              if (group.id === colorGroupId) {
+                return {
+                  ...group,
+                  images: group.images.map((img) => (img === localPreviewUrl ? serverUrl : img)),
+                };
+              }
+              return group;
+            })
+          );
+        } catch (err) {
+          console.warn('Background upload failed, keeping base64 fallback:', err);
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const resultUrl = e.target?.result as string;
+            if (resultUrl) {
+              setColorGroups((prev) =>
+                prev.map((group) => {
+                  if (group.id === colorGroupId) {
+                    return {
+                      ...group,
+                      images: group.images.map((img) => (img === localPreviewUrl ? resultUrl : img)),
+                    };
+                  }
+                  return group;
+                })
+              );
+            }
+          };
+          reader.readAsDataURL(file);
+        } finally {
+          setUploadingImageUrls((prev) => {
+            const next = { ...prev };
+            delete next[localPreviewUrl];
+            return next;
+          });
+        }
+      })
+    );
+  };
+
+  const handleSwatchImageUpload = async (colorGroupId: string, file: File | undefined) => {
+    if (!file) return;
+    const localPreviewUrl = URL.createObjectURL(file);
+
+    setColorGroups((prev) =>
+      prev.map((group) => {
+        if (group.id === colorGroupId) {
+          return {
+            ...group,
+            swatchImage: localPreviewUrl,
+          };
+        }
+        return group;
+      })
+    );
+
+    setUploadingImageUrls((prev) => ({ ...prev, [localPreviewUrl]: true }));
+
+    try {
+      const uploaded = await productService.uploadImage(file, file.name, 'swatches');
+      const serverUrl = uploaded.url;
+      setColorGroups((prev) =>
+        prev.map((group) => {
+          if (group.id === colorGroupId) {
+            return {
+              ...group,
+              swatchImage: serverUrl,
+            };
+          }
+          return group;
+        })
+      );
+    } catch (err) {
+      console.warn('Swatch upload failed, keeping base64 fallback:', err);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const swatchUrl = e.target?.result as string;
+        if (swatchUrl) {
+          setColorGroups((prev) =>
+            prev.map((group) => {
+              if (group.id === colorGroupId) {
+                return {
+                  ...group,
+                  swatchImage: swatchUrl,
+                };
+              }
+              return group;
+            })
+          );
+        }
+      };
+      reader.readAsDataURL(file);
+    } finally {
+      setUploadingImageUrls((prev) => {
+        const next = { ...prev };
+        delete next[localPreviewUrl];
+        return next;
+      });
+    }
+  };
+
+  const removeSwatchImage = (colorGroupId: string) => {
+    setColorGroups((prev) =>
+      prev.map((group) => {
+        if (group.id === colorGroupId) {
+          const copy = { ...group };
+          delete copy.swatchImage;
+          return copy;
+        }
+        return group;
+      })
+    );
+  };
+
+  /**
+   * Shot type per image, keyed by URL. Kept beside the gallery rather than in
+   * ColorVariantGroup so the shared preview type stays a plain string[]; it is
+   * sent as the media title on save.
+   */
+  const [imageLabels, setImageLabels] = useState<Record<string, string>>(() => {
+    const labels: Record<string, string> = {};
+    (initialData?.images || []).forEach((img: unknown) => {
+      const imgObj = img as { url?: string; title?: string };
+      if (imgObj?.url && imgObj?.title) {
+        labels[imgObj.url] = imgObj.title;
+      }
+    });
+    return labels;
+  });
+
+  // Everything the AI Content Assistant may put in a prompt, in the order a
+  // person would describe the garment. Empty entries are dropped downstream by
+  // collectFields -- nothing here needs to check for blanks.
+  const aiWatch = useWatch({ control: methods.control });
+  const aiCandidates = useMemo(() => {
+    const values = (aiWatch ?? {}) as Record<string, unknown>;
+    const nameOf = (id: string) => categories.find((c) => c.id === id)?.name;
+    // Fashion attributes (fabric, pattern, fit, sleeve, neck, material) are
+    // configured under Catalog -> Attributes, not columns, so they are read
+    // from the attribute map by their own names.
+    const attributeFields = productAttributes.map((a) => ({
+      label: a.name,
+      key: attributeVariableKey(a.slug, a.name),
+      value: attributeValues[a.id],
+    }));
+
+    return [
+      { label: 'Product Name', key: 'product_name', value: values.name },
+      { label: 'Category', key: 'category', value: nameOf(primaryCategoryId) },
+      { label: 'Subcategory', key: 'subcategory', value: nameOf(subCategoryId) },
+      {
+        label: 'Brand',
+        key: 'brand',
+        value: brands.find((b: { id: string; name: string }) => b.id === values.brandId)?.name,
+      },
+      { label: 'Colour', key: 'color', value: colorGroups.map((g) => g.name) },
+      ...attributeFields,
+      { label: 'Occasion', key: 'occasion', value: occasion },
+      { label: 'Season', key: 'season', value: values.season },
+      { label: 'Collection', key: 'collection', value: values.collections },
+      { label: 'Tags', key: 'tags', value: tags },
+      { label: 'Existing Short Description', key: 'short_description', value: values.shortDescription },
+      { label: 'Existing Description', key: 'description', value: values.description },
+    ];
+  }, [aiWatch, categories, primaryCategoryId, subCategoryId, brands, colorGroups, productAttributes, attributeValues, occasion, tags]);
+
+  const aiReferenceImages = useMemo(
+    () => colorGroups.flatMap((g) => [g.swatchImage, ...g.images].filter(Boolean) as string[]),
+    [colorGroups],
+  );
+
+  /** Move an image within its color group — position 0 is that color's primary. */
+  const moveImage = (colorGroupId: string, imgIdx: number, direction: -1 | 1) => {
+    setColorGroups((prev) =>
+      prev.map((group) => {
+        if (group.id !== colorGroupId) return group;
+        const target = imgIdx + direction;
+        if (target < 0 || target >= group.images.length) return group;
+        const images = [...group.images];
+        [images[imgIdx], images[target]] = [images[target], images[imgIdx]];
+        return { ...group, images };
+      }),
+    );
+  };
+
+  /** Promote an image to position 0 and make its color group primary. */
+  const setPrimaryImage = (colorGroupId: string, imgIdx: number) => {
+    setColorGroups((prev) => {
+      const groupIdx = prev.findIndex((g) => g.id === colorGroupId);
+      if (groupIdx === -1) return prev;
+
+      const updated = prev.map((group) => {
+        if (group.id !== colorGroupId) return group;
+        const images = [...group.images];
+        const [picked] = images.splice(imgIdx, 1);
+        return { ...group, images: [picked, ...images] };
+      });
+
+      const [primaryGroup] = updated.splice(groupIdx, 1);
+      return [primaryGroup, ...updated];
+    });
+  };
+
+  const removeImageFromColorGroup = (colorGroupId: string, imgIdx: number) => {
+    setColorGroups((prev) =>
+      prev.map((group) => {
+        if (group.id === colorGroupId) {
+          return {
+            ...group,
+            images: group.images.filter((_, idx) => idx !== imgIdx),
+          };
+        }
+        return group;
+      })
+    );
+  };
+
+  const rawWatchedValues = useWatch({ control: methods.control });
+  const watchedValues = useMemo(() => rawWatchedValues || {}, [rawWatchedValues]);
+
+  // What a customer actually pays today: Sale Price if set, otherwise MRP.
+  const referencePrice = Number(watchedValues?.salePrice) || Number(watchedValues?.basePrice) || 0;
+
+  const promoPreviewRows = useMemo(() => {
+    const couponRows = coupons
+      .filter((c) => selectedCouponIds.includes(c.id))
+      .map((c) => ({
+        key: `coupon-${c.id}`,
+        label: c.code,
+        sub: c.name,
+        ...computePromoPreview(c.type, Number(c.value), c.minOrderAmount, c.maxDiscountAmount, referencePrice),
+      }));
+    const offerRows = offers
+      .filter((o) => selectedOfferIds.includes(o.id))
+      .map((o) => ({
+        key: `offer-${o.id}`,
+        label: o.name,
+        sub: `${o.value}% off (auto-applied, no code needed)`,
+        ...computePromoPreview(o.type, Number(o.value), o.minOrderAmount, o.maxDiscountAmount, referencePrice),
+      }));
+    return [...couponRows, ...offerRows];
+  }, [coupons, offers, selectedCouponIds, selectedOfferIds, referencePrice]);
+
+  // Selected Brand Name for Live Preview
+  const selectedBrandObj = brands.find((b: { id: string; name?: string }) => b.id === watchedValues.brandId);
+  const selectedBrandName = selectedBrandObj?.name || 'Vasanthi Designers';
+
+  // Construct Live Preview Data Object
+  /**
+   * Pre-save validation gate. These are cross-field rules the zod schema cannot
+   * express (it only sees the form values, not the color groups), and they are
+   * what stops a half-configured product from reaching the storefront.
+   */
+  const validationIssues = useMemo(() => {
+    const issues: string[] = [];
+
+    if (!watchedValues.name || watchedValues.name.trim().length < 3) {
+      issues.push('Product name is missing (minimum 3 characters).');
+    }
+    if (!watchedValues.brandId) issues.push('No brand selected.');
+    if (!primaryCategoryId) {
+      issues.push('No category selected — the product will not appear anywhere on the storefront.');
+    }
+
+    const base = Number(watchedValues.basePrice) || 0;
+    const sale = Number(watchedValues.salePrice) || 0;
+    if (base <= 0) issues.push('MRP / base price must be greater than 0.');
+    if (sale > 0 && sale > base) issues.push('Selling price is higher than the MRP.');
+
+    if (colorGroups.length === 0) {
+      issues.push('No colour added — barcodes are issued per colour and size.');
+    }
+
+    const seenColors = new Set<string>();
+    const seenSkus = new Set<string>();
+    for (const group of colorGroups) {
+      const key = group.name.trim().toLowerCase();
+      if (seenColors.has(key)) issues.push(`Duplicate colour: ${group.name}.`);
+      seenColors.add(key);
+
+      const hasImage = Boolean(group.swatchImage) || group.images.length > 0;
+      if (!hasImage) issues.push(`${group.name} has no image.`);
+
+      const availableSizes = group.sizes.filter((s) => s.available);
+      if (availableSizes.length === 0) {
+        issues.push(`${group.name} has no size selected.`);
+      }
+      for (const sizeRow of availableSizes) {
+        if (!sizeRow.stock || sizeRow.stock <= 0) {
+          issues.push(`${group.name} / ${sizeRow.size} has no stock configured.`);
+        }
+        const sku = (sizeRow.sku || '').trim().toLowerCase();
+        if (sku) {
+          if (seenSkus.has(sku)) issues.push(`Duplicate SKU: ${sizeRow.sku}.`);
+          seenSkus.add(sku);
+        }
+      }
+    }
+
+    for (const attribute of productAttributes) {
+      if (attribute.isRequired && !(attributeValues[attribute.id] ?? '').trim()) {
+        issues.push(`Required attribute missing: ${attribute.name}.`);
+      }
+    }
+
+    return issues;
+  }, [watchedValues, colorGroups, primaryCategoryId, productAttributes, attributeValues]);
+
+  const canPublish = validationIssues.length === 0;
+
+  /** Map validation or API error text to the target builder tab so clicking navigates directly there */
+  const getTabForIssue = (issueText: string): 'basic' | 'organisation' | 'pricing' | 'colors' | 'sizes' | 'attributes' | 'seo' => {
+    const lower = issueText.toLowerCase();
+    if (lower.includes('category') || lower.includes('organisation') || lower.includes('collection') || lower.includes('tag')) {
+      return 'organisation';
+    }
+    if (lower.includes('name') || lower.includes('brand') || lower.includes('description') || lower.includes('gender')) {
+      return 'basic';
+    }
+    if (lower.includes('price') || lower.includes('mrp') || lower.includes('tax') || lower.includes('hsn') || lower.includes('cost')) {
+      return 'pricing';
+    }
+    if (lower.includes('color') || lower.includes('colour') || lower.includes('image') || lower.includes('swatch') || lower.includes('media')) {
+      return 'colors';
+    }
+    if (lower.includes('size') || lower.includes('stock') || lower.includes('sku') || lower.includes('barcode')) {
+      return 'sizes';
+    }
+    if (lower.includes('attribute') || lower.includes('fabric') || lower.includes('material')) {
+      return 'attributes';
+    }
+    return 'seo';
+  };
+
+  const livePreviewData: LivePreviewData = useMemo(() => {
+    return {
+      name: watchedValues.name || 'Women\'s Ethnic Wear',
+      brandName: selectedBrandName,
+      basePrice: Number(watchedValues.basePrice) || 0,
+      salePrice: Number(watchedValues.salePrice) || undefined,
+      shortDescription: watchedValues.shortDescription,
+      description: watchedValues.description,
+      gender: watchedValues.gender,
+      isNewArrival: watchedValues.isNewArrival,
+      isBestSeller: watchedValues.isBestSeller,
+      isFeatured: watchedValues.isFeatured,
+      isTrending: watchedValues.isTrending,
+      colorGroups: colorGroups,
+    };
+  }, [watchedValues, selectedBrandName, colorGroups]);
+
+  const deferredPreviewData = useDeferredValue(livePreviewData);
+
+  const dataUrlToBlob = async (dataUrl: string): Promise<Blob> => {
+    try {
+      const res = await fetch(dataUrl);
+      return await res.blob();
+    } catch {
+      const parts = dataUrl.split(',');
+      const header = parts[0] || '';
+      const rawData = parts.slice(1).join(',');
+      if (header.includes(';base64')) {
+        const binary = atob(rawData.replace(/\s/g, ''));
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const mime = header.match(/data:(.*?);base64/)?.[1] || 'image/png';
+        return new Blob([bytes], { type: mime });
+      }
+      const decoded = decodeURIComponent(rawData);
+      const mime = header.match(/data:(.*?);/)?.[1] || 'image/svg+xml';
+      return new Blob([decoded], { type: mime });
+    }
+  };
+
+  const handleSubmitForm = async (values: ProductFormValues) => {
+    // Saving a draft is always allowed so partial work is never lost, but a
+    // product with outstanding issues must not reach the storefront.
+    if (values.isPublished && validationIssues.length > 0) {
+      const firstIssue = validationIssues[0];
+      const targetTab = getTabForIssue(firstIssue);
+      setActiveTab(targetTab);
+      setSaveMessage(
+        `✕ Cannot publish — ${validationIssues.length} issue${validationIssues.length === 1 ? '' : 's'} to fix: ${firstIssue}`,
+      );
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSaveMessage(null);
+    setIssuedVariants([]);
+    try {
+      // If a custom card cover image is uploaded (base64 data URL), upload it to server first
+      let finalCardCoverUrl = productCardImageUrl;
+      if (productCardImageUrl && productCardImageUrl.startsWith('data:')) {
+        try {
+          const blob = await dataUrlToBlob(productCardImageUrl);
+          const uploadedCard = await productService.uploadImage(blob, `card-cover-${Date.now()}.png`);
+          finalCardCoverUrl = uploadedCard.url;
+          setProductCardImageUrl(finalCardCoverUrl);
+        } catch (e) {
+          console.warn('Failed to upload card cover image:', e);
+        }
+      }
+
+      // Organisation lives outside the react-hook-form schema, so merge it in.
+      const validSubCategoryId = subCategories.some(c => c.id === subCategoryId) ? subCategoryId : '';
+      const categoryIds = [primaryCategoryId, validSubCategoryId].filter(Boolean);
+      const cleanHsn = values.hsnCode?.trim() ? values.hsnCode.trim() : undefined;
+
+      // Sync tags with custom tailoring & wholesale pricing customer visibility toggles
+      let finalTags = [...tags];
+      if (enableCustomTailoring) {
+        if (!finalTags.includes('custom-tailoring')) finalTags.push('custom-tailoring');
+      } else {
+        finalTags = finalTags.filter((t) => t !== 'custom-tailoring' && t !== 'custom-stitch');
+      }
+
+      if (enableWholesalePricing) {
+        if (!finalTags.includes('wholesale-pricing')) finalTags.push('wholesale-pricing');
+      } else {
+        finalTags = finalTags.filter((t) => t !== 'wholesale-pricing' && t !== 'b2b');
+      }
+
+      const payload = {
+        ...values,
+        ...(cleanHsn ? { hsnCode: cleanHsn } : { hsnCode: undefined }),
+        ...(categoryIds.length > 0 ? { categoryIds } : {}),
+        tags: finalTags,
+        ...(collections.length > 0 ? { collections } : {}),
+        ...(occasion ? { occasion } : {}),
+        sizeChartTemplateId: sizeChartTemplateId || undefined,
+      };
+
+      // Explicitly strip virtual/read-only properties so neither POST /products nor PATCH /products/:id rejects them
+      const {
+        primaryImageUrl: _pUrl,
+        categoryIds: catIds,
+        images: _images,
+        media: _media,
+        variants: _variants,
+        colorGroups: _colorGroups,
+        colorVariants: _colorVariants,
+        ...cleanPayload
+      } = payload as Record<string, unknown>;
+
+      let created: ProductResponse;
+      if (productId) {
+        const updatePayload = {
+          ...cleanPayload,
+          categoryIds: (catIds as string[]) || [],
+        };
+        created = await productService.update(productId, updatePayload as UpdateProductDto);
+      } else {
+        const createPayload = {
+          ...cleanPayload,
+          ...(catIds && Array.isArray(catIds) && catIds.length > 0 ? { categoryIds: catIds } : {}),
+        };
+        created = await productService.create(createPayload as CreateProductDto);
+      }
+
+      // Parallelize dynamic attributes assignment
+      const attributeEntries = Object.entries(attributeValues)
+        .filter(([, value]) => value.trim() !== '')
+        .map(([attributeId, value]) => ({ attributeId, value: value.trim() }));
+
+      const assignAttributesPromise = attributeEntries.length > 0
+        ? productService.assignAttributes(created.id, { attributes: attributeEntries }).catch(() => null)
+        : Promise.resolve();
+
+      // Prevent duplicate image creation on Edit mode by tracking existing media
+      const existingMedia = created.images || [];
+      const existingMediaMap = new Map<string, string>();
+      existingMedia.forEach((m) => {
+        if (m.url && m.id) existingMediaMap.set(m.url, String(m.id));
+      });
+
+      // Prepare all media upload and attachment tasks in parallel
+      const mediaTasks: Array<{
+        group: ColorVariantGroup;
+        img: string;
+        isPrimary: boolean;
+        order: number;
+        isFabric?: boolean;
+        title?: string;
+      }> = [];
+      let displayOrder = 0;
+      let primaryFound = false;
+
+      const primaryUrlTarget = finalCardCoverUrl || undefined;
+
+      // 1. First add all actual product gallery photos across color groups (excluding swatch photos)
+      for (const group of colorGroups) {
+        const groupImages = Array.from(new Set(group.images.filter(Boolean) as string[])).filter(
+          (u) => u !== group.swatchImage
+        );
+        for (let i = 0; i < groupImages.length; i++) {
+          const img = groupImages[i];
+          const isImgPrimary = primaryUrlTarget ? img === primaryUrlTarget : (!primaryFound && i === 0 && group === colorGroups[0]);
+          if (isImgPrimary) primaryFound = true;
+          const label = imageLabels[img] || (i === 0 ? 'Front' : undefined);
+          mediaTasks.push({
+            group,
+            img,
+            isPrimary: isImgPrimary,
+            order: displayOrder++,
+            title: label,
+          });
+        }
+      }
+
+      // If a dedicated card cover image exists and wasn't in any gallery images, add it as primary
+      if (primaryUrlTarget && !mediaTasks.some((t) => t.img === primaryUrlTarget) && colorGroups[0]) {
+        mediaTasks.unshift({
+          group: colorGroups[0],
+          img: primaryUrlTarget,
+          isPrimary: true,
+          order: 0,
+          title: 'Catalog Cover Photo',
+        });
+      }
+
+      // 2. Add separate fabric texture swatches as FABRIC with title 'FABRIC_SWATCH' (never primary)
+      for (const group of colorGroups) {
+        if (group.swatchImage) {
+          mediaTasks.push({
+            group,
+            img: group.swatchImage,
+            isPrimary: false,
+            order: displayOrder++,
+            isFabric: true,
+            title: 'FABRIC_SWATCH',
+          });
+        }
+      }
+
+      // 3. Delete any orphaned media that the user deleted from the UI
+      const allCurrentImages = new Set<string>();
+      for (const task of mediaTasks) {
+        allCurrentImages.add(task.img);
+      }
+      for (const existing of existingMedia) {
+        if (existing.id && existing.url && !allCurrentImages.has(existing.url)) {
+          await productService.deleteMedia(String(existing.id)).catch(() => null);
+        }
+      }
+
+      const mediaIdsByGroup: Record<string, string[]> = {};
+      colorGroups.forEach((g) => {
+        mediaIdsByGroup[g.id] = [];
+      });
+
+      // Upload and attach or update existing images in parallel
+      await Promise.all(
+        mediaTasks.map(async (task) => {
+          let url = task.img;
+          const existingId = existingMediaMap.get(url);
+          if (existingId) {
+            mediaIdsByGroup[task.group.id].push(existingId);
+            await productService.updateMedia(existingId, {
+              isPrimary: task.isPrimary,
+              displayOrder: task.order,
+              mediaType: task.isFabric ? 'FABRIC' : 'IMAGE',
+              color: task.group.name,
+              title: task.title,
+            }).catch(() => null);
+            return;
+          }
+
+          if (url.startsWith('data:') || url.startsWith('blob:')) {
+            try {
+              const blob = await dataUrlToBlob(url);
+              const uploaded = await productService.uploadImage(blob, `${task.group.name}-${task.order}.png`);
+              url = uploaded.url;
+            } catch (e) {
+              console.warn('Failed to upload image blob:', e);
+            }
+          }
+
+          const uploadedExistingId = existingMediaMap.get(url);
+          if (uploadedExistingId) {
+            mediaIdsByGroup[task.group.id].push(uploadedExistingId);
+            await productService.updateMedia(uploadedExistingId, {
+              isPrimary: task.isPrimary,
+              displayOrder: task.order,
+              mediaType: task.isFabric ? 'FABRIC' : 'IMAGE',
+              color: task.group.name,
+              title: task.title,
+            }).catch(() => null);
+            return;
+          }
+
+          if (url.startsWith('data:') || url.startsWith('blob:')) {
+            console.warn('Skipping un-uploadable blob image:', url);
+            return;
+          }
+
+          const media = await productService
+            .addMedia({
+              productId: created.id,
+              url,
+              mediaType: task.isFabric ? 'FABRIC' : 'IMAGE',
+              isPrimary: task.isPrimary,
+              displayOrder: task.order,
+              color: task.group.name,
+              title: task.title,
+            })
+            .catch((err) => {
+              console.warn('Failed to add product media:', err);
+              return null;
+            });
+
+          if (media?.id) {
+            mediaIdsByGroup[task.group.id].push(String(media.id));
+            existingMediaMap.set(url, String(media.id));
+          }
+        })
+      );
+
+      // Fetch attributes, existing variants, and inventory in parallel
+      const [attributeList, existingVariants, existingInventoryList] = await Promise.all([
+        assignAttributesPromise.then(() =>
+          attributeService.findAllAttributes({ limit: 100 }).catch(() => ({ data: [] as AttributeResponse[] }))
+        ),
+        variantService.findAll({ productId: created.id, limit: 100 }).catch(() => null),
+        inventoryService.findAll({ limit: 100 }).catch(() => null),
+      ]);
+
+      const attributes = attributeList?.data ?? [];
+      const existingInvMap = new Map<string, string>();
+      (existingInventoryList?.data || []).forEach((inv) => {
+        if (inv.variantId && inv.id) existingInvMap.set(inv.variantId, inv.id);
+      });
+
+      // Build a map of wanted active variant titles -> sizeRow details
+      const wantedVariantsMap = new Map<string, { group: ColorVariantGroup; sizeRow: ColorVariantGroup['sizes'][number] }>();
+      for (const group of colorGroups) {
+        for (const sizeRow of group.sizes) {
+          if (sizeRow.available) {
+            const titleKey = `${group.name} / ${sizeRow.size}`.toLowerCase().trim();
+            wantedVariantsMap.set(titleKey, { group, sizeRow });
+          }
+        }
+      }
+
+      // Check existing variants in database
+      const dbVariantsList = existingVariants?.data ?? [];
+      const existingVariantsByTitle = new Map<string, (typeof dbVariantsList)[0]>();
+      dbVariantsList.forEach((v) => {
+        const titleKey = String(v.title ?? '').toLowerCase().trim();
+        if (titleKey) existingVariantsByTitle.set(titleKey, v);
+      });
+
+      // Delete/Deactivate removed variants in parallel
+      const cleanupDeletions = dbVariantsList
+        .filter((existingVar) => {
+          const titleKey = String(existingVar.title ?? '').toLowerCase().trim();
+          return titleKey && !wantedVariantsMap.has(titleKey);
+        })
+        .map((existingVar) =>
+          variantService.delete(existingVar.id).catch(() => variantService.deactivate(existingVar.id).catch(() => null))
+        );
+
+      await Promise.all(cleanupDeletions);
+
+      // Helper function to update or create inventory record with exact availableQuantity sync
+      const syncVariantInventory = async (vId: string, sizeRow: ColorVariantGroup['sizes'][number]) => {
+        let existingInvId = existingInvMap.get(vId);
+        const targetStock = Math.max(0, Number(sizeRow.stock) || 0);
+
+        if (!existingInvId) {
+          try {
+            const foundInv = await inventoryService.findByVariantId(vId);
+            if (foundInv?.id) {
+              existingInvId = foundInv.id;
+              existingInvMap.set(vId, foundInv.id);
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (existingInvId) {
+          return inventoryService
+            .update(existingInvId, {
+              availableQuantity: targetStock,
+              minimumStock: sizeRow.minStock ?? 5,
+              reorderLevel: sizeRow.reorderLevel ?? 10,
+              maximumStock: 100,
+            })
+            .catch(() => null);
+        } else {
+          return inventoryService
+            .create({
+              variantId: vId,
+              availableQuantity: targetStock,
+              minimumStock: sizeRow.minStock ?? 5,
+              reorderLevel: sizeRow.reorderLevel ?? 10,
+              maximumStock: 100,
+              reason: 'Product catalog size stock setup',
+            })
+            .then((newInv) => {
+              if (newInv?.id) existingInvMap.set(vId, newInv.id);
+            })
+            .catch(() => null);
+        }
+      };
+
+      // Prepare all variant creation and inventory sync tasks in parallel
+      const issued: IssuedVariant[] = [];
+      const variantIdsByGroup: Record<string, string[]> = {};
+      colorGroups.forEach((g) => {
+        variantIdsByGroup[g.id] = [];
+      });
+
+      const variantTasks: Array<{
+        group: ColorVariantGroup;
+        sizeRow: ColorVariantGroup['sizes'][number];
+        title: string;
+        titleKey: string;
+        order: number;
+      }> = [];
+
+      let variantOrder = 0;
+      for (const group of colorGroups) {
+        for (const sizeRow of group.sizes) {
+          if (!sizeRow.available) continue;
+          const title = `${group.name} / ${sizeRow.size}`;
+          const titleKey = title.toLowerCase().trim();
+          variantTasks.push({ group, sizeRow, title, titleKey, order: variantOrder++ });
+        }
+      }
+
+      const variantResults = await Promise.all(
+        variantTasks.map(async (task) => {
+          const { group, sizeRow, title, titleKey, order } = task;
+          const existingVar = existingVariantsByTitle.get(titleKey);
+          const rawPrice = sizeRow.price !== undefined && sizeRow.price !== null && !isNaN(Number(sizeRow.price)) && Number(sizeRow.price) > 0 ? Number(sizeRow.price) : undefined;
+          const rawSalePrice = sizeRow.salePrice !== undefined && sizeRow.salePrice !== null && !isNaN(Number(sizeRow.salePrice)) && Number(sizeRow.salePrice) > 0 ? Number(sizeRow.salePrice) : undefined;
+          const rawCostPrice = sizeRow.costPrice !== undefined && sizeRow.costPrice !== null && !isNaN(Number(sizeRow.costPrice)) && Number(sizeRow.costPrice) > 0 ? Number(sizeRow.costPrice) : (values.costPrice ? Number(values.costPrice) : undefined);
+
+          const candidateSku = sizeRow.sku || buildSmartVariantSku(group.name, sizeRow.size);
+          const candidateBarcode =
+            existingVar?.barcode ||
+            candidateSku.replace(/[^A-Z0-9]/gi, '');
+
+          if (existingVar) {
+            await syncVariantInventory(existingVar.id, sizeRow);
+            await variantService
+              .update(existingVar.id, {
+                priceOverride: rawPrice,
+                salePriceOverride: rawSalePrice,
+                costPrice: rawCostPrice,
+                ...(existingVar.barcode ? {} : { barcode: candidateBarcode }),
+              })
+              .catch(() => null);
+
+            return {
+              groupId: group.id,
+              variantId: existingVar.id,
+              issued: {
+                sku: existingVar.sku,
+                barcode: existingVar.barcode || candidateBarcode,
+                title,
+                stock: sizeRow.stock,
+                price: rawSalePrice || rawPrice || Number(values.salePrice || values.basePrice || 0),
+              },
+            };
+          } else {
+            const variant = await variantService
+              .create({
+                productId: created.id,
+                title,
+                sku: sizeRow.sku || undefined,
+                barcode: candidateBarcode,
+                priceOverride: rawPrice,
+                salePriceOverride: rawSalePrice,
+                costPrice: rawCostPrice,
+                displayOrder: order,
+                isDefault: order === 0 && existingVariantsByTitle.size === 0,
+                attributeValues: buildVariantAttributeValues(attributes, group.name, sizeRow.size),
+              })
+              .catch(() => null);
+
+            if (!variant?.id) return null;
+            await syncVariantInventory(variant.id, sizeRow);
+            return {
+              groupId: group.id,
+              variantId: variant.id,
+              issued: {
+                sku: variant.sku,
+                barcode: variant.barcode || candidateBarcode,
+                title,
+                stock: sizeRow.stock,
+                price: rawSalePrice || rawPrice || Number(values.salePrice || values.basePrice || 0),
+              },
+            };
+          }
+        })
+      );
+
+      variantResults.forEach((res) => {
+        if (res) {
+          variantIdsByGroup[res.groupId].push(res.variantId);
+          issued.push(res.issued);
+        }
+      });
+
+      // Bind color groups, coupons, and offers in parallel
+      const syncPayload = colorGroups.map((group) => {
+        const optionId = findColorOptionId(attributes, group.name);
+        return {
+          id: group.id && !group.id.startsWith('col-') ? group.id : undefined,
+          colorAttributeOptionId: optionId || undefined,
+          label: group.name,
+          variantIds: variantIdsByGroup[group.id] ?? [],
+          mediaIds: mediaIdsByGroup[group.id] ?? [],
+        };
+      });
+
+      await Promise.all([
+        productService.syncColorGroups(created.id, { colorGroups: syncPayload }).catch((err) => {
+          console.warn('Failed to sync color groups:', err);
+          return null;
+        }),
+        ...coupons.map((coupon) => {
+          const diff = diffProductAttachment(coupon, created.id, selectedCouponIds.includes(coupon.id));
+          return diff ? couponService.update(coupon.id, diff).catch(() => null) : Promise.resolve();
+        }),
+        ...offers.map((offer) => {
+          const diff = diffProductAttachment(offer, created.id, selectedOfferIds.includes(offer.id));
+          return diff ? offerService.update(offer.id, diff).catch(() => null) : Promise.resolve();
+        }),
+      ]);
+
+      setIssuedVariants(issued);
+      setLabelQtyBySku(
+        Object.fromEntries(issued.map((v) => [v.sku, Math.max(1, v.stock || 1)])),
+      );
+      setSaveMessage(
+        issued.length > 0
+          ? `✓ Product saved — ${issued.length} variant${issued.length === 1 ? '' : 's'} created with barcodes.`
+          : '✓ Product saved successfully!',
+      );
+      if (onSaveSuccess) onSaveSuccess(created.id);
+      if (issued.length === 0) setTimeout(() => setSaveMessage(null), 3000);
+    } catch (err) {
+      let rawErr = getApiErrorMessage(err, 'Failed to save product');
+      if (rawErr.includes('property') && rawErr.includes('should not exist')) {
+        rawErr = rawErr.replace(/property\s+([a-zA-Z0-9_]+)\s+should not exist/gi, 'Property "$1" is read-only on update.');
+      }
+      setSaveMessage('✕ ' + rawErr);
+      setActiveTab(getTabForIssue(rawErr));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const productName = methods.getValues('name') || 'Product';
+
+  const handlePrintLabel = async (variant: IssuedVariant) => {
+    if (!variant.barcode) return;
+    setPrintingSku(variant.sku);
+    try {
+      const qty = Math.max(1, labelQtyBySku[variant.sku] || 1);
+      const barcodeCode = variant.barcode || variant.sku;
+      const barcodeImgUrl = generateCode128SvgDataUrl(barcodeCode, 48, 2);
+      const qrImgUrl = generateQrCodeSvgDataUrl(barcodeCode, 120);
+
+      const stickerCardsHtml = Array.from({ length: qty }).map(() => `
+        <div class="sticker-card">
+          <div class="header-diamond">❖</div>
+          <div class="store-title">VASANTHI DESIGNERS</div>
+          <div class="divider"></div>
+          <div class="product-title">${productName} | ${variant.title}</div>
+          <div class="sku-badge">${variant.sku}</div>
+          <div class="code-container">
+            <div class="barcode-box">
+              <img src="${barcodeImgUrl}" alt="barcode" />
+              <div class="barcode-num">${variant.barcode}</div>
+              <div class="sku-num">${variant.sku}</div>
+            </div>
+            <div class="dashed-line"></div>
+            <div class="qr-box">
+              <img src="${qrImgUrl}" alt="qr" />
+            </div>
+          </div>
+          <div class="divider"></div>
+          <div class="price">₹${variant.price}</div>
+        </div>
+      `).join('');
+
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Print Barcode Stickers - ${variant.sku}</title>
+          <style>
+            @page { size: auto; margin: 5mm; }
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+              margin: 0;
+              padding: 10px;
+              background: #fff;
+            }
+            .grid {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 15px;
+              justify-content: flex-start;
+            }
+            .sticker-card {
+              width: 320px;
+              padding: 16px;
+              border: 2px dashed #737373;
+              border-radius: 20px;
+              text-align: center;
+              background: #ffffff;
+              box-sizing: border-box;
+              page-break-inside: avoid;
+            }
+            .header-diamond {
+              color: #0284c7;
+              font-size: 14px;
+              font-weight: bold;
+            }
+            .store-title {
+              font-family: Georgia, serif;
+              font-size: 15px;
+              font-weight: 800;
+              letter-spacing: 1.5px;
+              color: #171717;
+              margin-top: 2px;
+            }
+            .divider {
+              height: 1px;
+              background: #e5e5e5;
+              margin: 8px 0;
+            }
+            .product-title {
+              font-size: 12px;
+              font-weight: 700;
+              color: #262626;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+            .sku-badge {
+              display: inline-block;
+              background: #09090b;
+              color: #ffffff;
+              border-radius: 9999px;
+              padding: 4px 18px;
+              font-family: monospace;
+              font-size: 13px;
+              font-weight: 700;
+              letter-spacing: 1px;
+              margin: 8px 0;
+            }
+            .code-container {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              gap: 10px;
+              margin: 4px 0;
+            }
+            .barcode-box img {
+              height: 48px;
+              max-width: 140px;
+            }
+            .barcode-num {
+              font-family: monospace;
+              font-size: 10px;
+              font-weight: 600;
+              color: #404040;
+              margin-top: -2px;
+            }
+            .sku-num {
+              font-family: monospace;
+              font-size: 9px;
+              color: #737373;
+            }
+            .dashed-line {
+              height: 48px;
+              border-right: 1px dashed #d4d4d4;
+            }
+            .qr-box img {
+              width: 48px;
+              height: 48px;
+            }
+            .price {
+              font-size: 24px;
+              font-weight: 900;
+              color: #000000;
+              margin-top: 2px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="grid">
+            ${stickerCardsHtml}
+          </div>
+        </body>
+        </html>
+      `;
+
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => {
+          printWindow.print();
+          printWindow.close();
+        }, 300);
+      }
+    } catch (err) {
+      setSaveMessage('✕ ' + getApiErrorMessage(err, 'Failed to generate labels'));
+    } finally {
+      setPrintingSku(null);
+    }
+  };
+
+  const handlePrintAllLabels = async () => {
+    // Sequential — each print opens its own window; concurrent window.open
+    // calls get blocked as popups by most browsers.
+    for (const variant of issuedVariants) {
+      await handlePrintLabel(variant);
+    }
+  };
+
+  return (
+    <FormProvider {...methods}>
+      <form onSubmit={methods.handleSubmit(handleSubmitForm as never)} className="space-y-8">
+        
+        {/* TOP STATUS BAR & HEADER */}
+        <div className="bg-white rounded-2xl p-4 sm:p-6 border border-neutral-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-sky-50 text-[#0284c7] flex items-center justify-center border border-sky-100 shadow-2xs font-serif text-lg sm:text-xl font-bold shrink-0">
+              ❖
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base sm:text-xl font-bold font-serif text-neutral-900">
+                  {productId ? 'Edit Catalog Product' : 'Add New E-Commerce Product'}
+                </h2>
+                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                  Live Sync
+                </span>
+              </div>
+              <p className="text-xs text-neutral-500 font-medium hidden sm:block">
+                Configure basic details, pricing, color-wise images & sizes with live customer desktop preview below
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto justify-end">
+            {saveMessage && (
+              <button
+                type="button"
+                onClick={() => setActiveTab(getTabForIssue(saveMessage))}
+                className={`text-xs font-bold px-3 py-2 rounded-xl border flex items-center gap-1.5 transition-all cursor-pointer ${
+                  saveMessage.startsWith('✓')
+                    ? 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                    : 'text-red-700 bg-red-50 border-red-200 hover:bg-red-100 shadow-2xs'
+                }`}
+              >
+                <span>{saveMessage}</span>
+                {!saveMessage.startsWith('✓') && (
+                  <span className="text-[10px] underline font-bold ml-1 text-red-600">(Click to fix)</span>
+                )}
+              </button>
+            )}
+
+            {!canPublish && (
+              <button
+                type="button"
+                onClick={() => {
+                  const firstIssue = validationIssues[0];
+                  if (firstIssue) {
+                    setActiveTab(getTabForIssue(firstIssue));
+                  } else {
+                    setActiveTab('basic');
+                  }
+                }}
+                className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-2 rounded-xl flex items-center gap-1.5 hover:bg-amber-100 transition-colors min-h-[38px] cursor-pointer shadow-2xs"
+              >
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>
+                  {validationIssues.length} issue{validationIssues.length === 1 ? '' : 's'} (Click to fix)
+                </span>
+              </button>
+            )}
+
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="w-full sm:w-auto justify-center bg-[#0284c7] hover:bg-[#0B3B78] text-white text-xs font-bold uppercase tracking-wider px-5 py-2.5 rounded-xl shadow-md transition-all hover:scale-105 flex items-center gap-2 disabled:opacity-60 disabled:hover:scale-100 min-h-[40px]"
+            >
+              <Save className="w-4 h-4" />
+              <span>
+                {isSubmitting
+                  ? 'Saving...'
+                  : watchedValues?.isPublished
+                    ? 'Save & Publish'
+                    : 'Save as Draft'}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* SECTION NAVIGATION TABS */}
+        <div className="flex border-b border-neutral-200 bg-white rounded-2xl p-1.5 border shadow-2xs gap-1 overflow-x-auto scrollbar-none">
+          <button
+            type="button"
+            onClick={() => setActiveTab('basic')}
+            className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'basic'
+                ? 'bg-[#0284c7] text-white shadow-sm'
+                : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50'
+            }`}
+          >
+            <Package className="w-4 h-4" />
+            <span>1. Basic Details</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('organisation')}
+            className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'organisation'
+                ? 'bg-[#0284c7] text-white shadow-sm'
+                : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50'
+            }`}
+          >
+            <FolderTree className="w-4 h-4" />
+            <span>2. Category &amp; Organisation</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('pricing')}
+            className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'pricing'
+                ? 'bg-[#0284c7] text-white shadow-sm'
+                : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50'
+            }`}
+          >
+            <DollarSign className="w-4 h-4" />
+            <span>3. Pricing &amp; Taxes</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('colors')}
+            className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'colors'
+                ? 'bg-[#0284c7] text-white shadow-sm'
+                : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50'
+            }`}
+          >
+            <Palette className="w-4 h-4" />
+            <span>4. Color Groups &amp; Media ({colorGroups.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('sizes')}
+            className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'sizes'
+                ? 'bg-[#0284c7] text-white shadow-sm'
+                : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50'
+            }`}
+          >
+            <Ruler className="w-4 h-4" />
+            <span>5. Color-Wise Sizes &amp; Stock</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('attributes')}
+            className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'attributes'
+                ? 'bg-[#0284c7] text-white shadow-sm'
+                : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50'
+            }`}
+          >
+            <ListChecks className="w-4 h-4" />
+            <span>6. Attributes</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('seo')}
+            className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'seo'
+                ? 'bg-[#0284c7] text-white shadow-sm'
+                : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50'
+            }`}
+          >
+            <Tag className="w-4 h-4" />
+            <span>7. Badges, SEO &amp; Publish</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('barcodes')}
+            className={`flex items-center gap-2 px-5 py-3 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'barcodes'
+                ? 'bg-[#0284c7] text-white shadow-sm'
+                : 'text-neutral-600 hover:text-neutral-900 hover:bg-neutral-50'
+            }`}
+          >
+            <QrCode className="w-4 h-4" />
+            <span>8. Barcode Stickers &amp; Labels ({issuedVariants.length || totalActiveSizes})</span>
+          </button>
+        </div>
+
+        {/* TAB 1: BASIC INFORMATION */}
+        {activeTab === 'basic' && (
+          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-sm space-y-6">
+            <h3 className="text-base font-bold text-neutral-900 flex items-center gap-2">
+              <Package className="w-5 h-5 text-[#0284c7]" />
+              <span>Product Specification & Description</span>
+            </h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Name */}
+              <div className="md:col-span-2 space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">
+                  Product Name / Title <span className="text-sky-600">*</span>
+                </label>
+                <input
+                  type="text"
+                  {...methods.register('name')}
+                  placeholder="e.g. Women's Floral Printed Anarkali Kurta Set"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+                {methods.formState.errors.name && (
+                  <p className="text-[11px] font-semibold text-sky-600">
+                    {methods.formState.errors.name.message}
+                  </p>
+                )}
+              </div>
+
+              {/* Brand */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Brand</label>
+                <select
+                  {...methods.register('brandId')}
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                >
+                  <option value="">Select Brand (or default Vasanthi's Signature)</option>
+                  {brands.map((b: { id: string; name: string }) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+                {methods.formState.errors.brandId && (
+                  <p className="text-[11px] font-semibold text-sky-600">
+                    {methods.formState.errors.brandId.message}
+                  </p>
+                )}
+              </div>
+
+              {/* Type */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Product Type</label>
+                <select
+                  {...methods.register('type')}
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                >
+                  <option value="READYMADE">Readymade</option>
+                  <option value="UNSTITCHED">Unstitched Fabric</option>
+                  <option value="CUSTOM">Custom Tailored</option>
+                </select>
+              </div>
+
+              {/* Gender */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Gender Target</label>
+                <select
+                  {...methods.register('gender')}
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                >
+                  <option value="WOMEN">Women</option>
+                  <option value="GIRLS">Girls</option>
+                  <option value="UNISEX">Unisex</option>
+                </select>
+              </div>
+
+              {/* Season */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Season / Collection</label>
+                <input
+                  type="text"
+                  {...methods.register('season')}
+                  placeholder="e.g. Festive 2026, Summer Silk"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+              </div>
+
+              {/* Short Description */}
+              <div className="md:col-span-2 space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Short Summary</label>
+                <input
+                  type="text"
+                  {...methods.register('shortDescription')}
+                  placeholder="Brief 1-sentence product summary displayed under title..."
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+              </div>
+
+              {/* Full Description */}
+              <div className="md:col-span-2 space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Full Description</label>
+                <textarea
+                  rows={4}
+                  {...methods.register('description')}
+                  placeholder="Detailed specifications, fabric details, care instructions, craftsmanship..."
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl p-4 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+              </div>
+
+              {/* STOREFRONT CUSTOMER-FACING FEATURE TOGGLES */}
+              <div className="md:col-span-2 bg-sky-50/40 rounded-2xl p-5 border border-sky-100 space-y-4">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#0284c7]" />
+                  <h4 className="text-xs font-bold text-neutral-900 uppercase tracking-wider">
+                    Customer Storefront Features (Show / Hide on Product Page)
+                  </h4>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Custom Tailoring Toggle */}
+                  <div className={`p-4 rounded-xl border transition-all ${enableCustomTailoring ? 'bg-white border-[#0284c7] shadow-xs ring-1 ring-[#0284c7]/20' : 'bg-white/70 border-neutral-200'}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <Scissors className="w-4 h-4 text-[#0284c7]" />
+                          <span className="text-xs font-bold text-neutral-900">Custom Tailoring &amp; Stitching (+₹499)</span>
+                        </div>
+                        <p className="text-[11px] text-neutral-500">
+                          Show bespoke measurement customizer (Bust, Waist, Hips, Sleeve, Neckline) to customers on the product page.
+                        </p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={enableCustomTailoring}
+                          onChange={(e) => setEnableCustomTailoring(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-10 h-5 bg-neutral-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#0284c7]"></div>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* B2B / Wholesale Pricing Toggle */}
+                  <div className={`p-4 rounded-xl border transition-all ${enableWholesalePricing ? 'bg-white border-[#0284c7] shadow-xs ring-1 ring-[#0284c7]/20' : 'bg-white/70 border-neutral-200'}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <Boxes className="w-4 h-4 text-amber-600" />
+                          <span className="text-xs font-bold text-neutral-900">B2B &amp; Wholesale Reseller Pricing</span>
+                        </div>
+                        <p className="text-[11px] text-neutral-500">
+                          Show bulk reseller tier discounts (5-9 pcs @ 15% OFF, 10+ pcs @ 25% OFF) and quick bulk quantity selectors.
+                        </p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                        <input
+                          type="checkbox"
+                          checked={enableWholesalePricing}
+                          onChange={(e) => setEnableWholesalePricing(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-10 h-5 bg-neutral-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#0284c7]"></div>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Low Stock Urgency Alert Toggle */}
+                  <div className={`p-4 rounded-xl border transition-all ${methods.watch('isLimitedStock') ? 'bg-white border-[#0284c7] shadow-xs ring-1 ring-[#0284c7]/20' : 'bg-white/70 border-neutral-200'}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <Flame className="w-4 h-4 text-amber-500" />
+                          <span className="text-xs font-bold text-neutral-900">Low Stock Alert Badge (&quot;Only X left!&quot;)</span>
+                        </div>
+                        <p className="text-[11px] text-neutral-500">
+                          Show live remaining inventory urgency badge (e.g. &quot;Only 1 left - selling fast!&quot;) under selected size.
+                        </p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                        <input
+                          type="checkbox"
+                          {...methods.register('isLimitedStock')}
+                          className="sr-only peer"
+                        />
+                        <div className="w-10 h-5 bg-neutral-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#0284c7]"></div>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: CATEGORY & ORGANISATION */}
+        {activeTab === 'organisation' && (
+          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-sm space-y-6">
+            <h3 className="text-base font-bold text-neutral-900 flex items-center gap-2">
+              <FolderTree className="w-5 h-5 text-[#0284c7]" />
+              <span>Category &amp; Organisation</span>
+            </h3>
+            <p className="text-[11px] text-neutral-500 -mt-4">
+              A product with no category cannot be browsed on the storefront.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Primary category */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">
+                  Primary Category <span className="text-sky-600">*</span>
+                </label>
+                <select
+                  value={primaryCategoryId}
+                  onChange={(e) => {
+                    setPrimaryCategoryId(e.target.value);
+                    setSubCategoryId('');
+                  }}
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                >
+                  <option value="">Select a category</option>
+                  {rootCategories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+                {rootCategories.length === 0 && (
+                  <p className="text-[11px] font-semibold text-amber-600">
+                    No categories found. Create them under Catalog → Categories first.
+                  </p>
+                )}
+              </div>
+
+              {/* Sub category */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Sub Category</label>
+                <select
+                  value={subCategoryId}
+                  onChange={(e) => setSubCategoryId(e.target.value)}
+                  disabled={!primaryCategoryId || subCategories.length === 0}
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20 disabled:opacity-50"
+                >
+                  <option value="">
+                    {!primaryCategoryId
+                      ? 'Select a primary category first'
+                      : subCategories.length === 0
+                        ? 'No sub-categories'
+                        : 'Optional'}
+                  </option>
+                  {subCategories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Occasion */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Occasion</label>
+                <select
+                  value={occasion}
+                  onChange={(e) => setOccasion(e.target.value)}
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                >
+                  <option value="">Not specified</option>
+                  {['Festive', 'Wedding', 'Party', 'Casual', 'Office', 'Daily Wear'].map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Season / Collection Year (Commented out: already configured in Tab 1 Basic Information) */}
+              {/*
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Season / Collection Year</label>
+                <input
+                  type="text"
+                  {...methods.register('season')}
+                  placeholder="e.g. Festive 2026"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+              </div>
+              */}
+
+              {/* Collections */}
+              <div className="md:col-span-2 space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Collections</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={collectionInput}
+                    onChange={(e) => setCollectionInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addCollection();
+                      }
+                    }}
+                    placeholder="e.g. Festive Collection — press Enter to add"
+                    className="flex-1 bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={addCollection}
+                    className="px-4 py-3 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-neutral-700 transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  {collections.map((collection) => (
+                    <span
+                      key={collection}
+                      className="inline-flex items-center gap-1.5 bg-sky-50 text-[#0284c7] border border-sky-100 rounded-full px-3 py-1.5 text-[11px] font-bold"
+                    >
+                      {collection}
+                      <button
+                        type="button"
+                        onClick={() => setCollections((prev) => prev.filter((c) => c !== collection))}
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* Tags */}
+              <div className="md:col-span-2 space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Tags</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addTag();
+                      }
+                    }}
+                    placeholder="e.g. Floral, Rayon, Anarkali — press Enter to add"
+                    className="flex-1 bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={addTag}
+                    className="px-4 py-3 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-neutral-700 transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-2 pt-2">
+                  {tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center gap-1.5 bg-neutral-100 text-neutral-700 border border-neutral-200 rounded-full px-3 py-1.5 text-[11px] font-bold"
+                    >
+                      {tag}
+                      <button type="button" onClick={() => setTags((prev) => prev.filter((t) => t !== tag))}>
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: PRICING & TAXES */}
+        {activeTab === 'pricing' && (
+          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-sm space-y-6">
+            <h3 className="text-base font-bold text-neutral-900 flex items-center gap-2">
+              <DollarSign className="w-5 h-5 text-[#0284c7]" />
+              <span>Pricing, Discount & Taxes</span>
+            </h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Base Price / MRP */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">
+                  MRP / Base Price (₹) <span className="text-sky-600">*</span>
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  onKeyDown={preventNegativeKeys}
+                  onWheel={preventNegativeScroll}
+                  {...methods.register('basePrice')}
+                  placeholder="2499"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-sm text-neutral-900 font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+              </div>
+
+              {/* Sale Price */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Offer / Sale Price (₹)</label>
+                <input
+                  type="number"
+                  min="0"
+                  onKeyDown={preventNegativeKeys}
+                  onWheel={preventNegativeScroll}
+                  {...methods.register('salePrice')}
+                  placeholder="1799"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-sm text-neutral-900 font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+              </div>
+
+              {/* Cost Price */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Cost Price (Internal ₹)</label>
+                <input
+                  type="number"
+                  min="0"
+                  onKeyDown={preventNegativeKeys}
+                  onWheel={preventNegativeScroll}
+                  {...methods.register('costPrice')}
+                  placeholder="800"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-sm text-neutral-900 font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+              </div>
+
+              {/* Wholesale / B2B Price */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">B2B Wholesale Price (₹)</label>
+                <input
+                  type="number"
+                  min="0"
+                  onKeyDown={preventNegativeKeys}
+                  onWheel={preventNegativeScroll}
+                  {...methods.register('wholesalePrice' as any)}
+                  placeholder="e.g. 1200"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-sm text-neutral-900 font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+              </div>
+
+              {/* Min & Max Order Quantity Limits */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Min Order Qty</label>
+                <input
+                  type="number"
+                  min="1"
+                  onKeyDown={preventNegativeKeys}
+                  onWheel={preventNegativeScroll}
+                  {...methods.register('minimumOrderQuantity' as any)}
+                  placeholder="1"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-sm text-neutral-900 font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Max Order Qty</label>
+                <input
+                  type="number"
+                  min="1"
+                  onKeyDown={preventNegativeKeys}
+                  onWheel={preventNegativeScroll}
+                  {...methods.register('maximumOrderQuantity' as any)}
+                  placeholder="10"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-sm text-neutral-900 font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+              </div>
+
+              {/* Parcel Dimensions (DTDC Shipping Calculation) */}
+              <div className="md:col-span-3 pt-3 border-t border-neutral-100 space-y-3">
+                <h4 className="text-xs font-bold text-neutral-900 uppercase tracking-wider">Parcel Shipping Dimensions (DTDC Courier Fee Calculation)</h4>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="text-[11px] font-bold text-neutral-700 block mb-1">Weight (Kg)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      onKeyDown={preventNegativeKeys}
+                      onWheel={preventNegativeScroll}
+                      {...methods.register('weight' as any)}
+                      placeholder="0.8"
+                      className="w-full bg-neutral-50 border border-neutral-200 rounded-xl p-2.5 text-xs font-bold outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-neutral-700 block mb-1">Length (cm)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      onKeyDown={preventNegativeKeys}
+                      onWheel={preventNegativeScroll}
+                      {...methods.register('length' as any)}
+                      placeholder="35"
+                      className="w-full bg-neutral-50 border border-neutral-200 rounded-xl p-2.5 text-xs font-bold outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-neutral-700 block mb-1">Width (cm)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      onKeyDown={preventNegativeKeys}
+                      onWheel={preventNegativeScroll}
+                      {...methods.register('width' as any)}
+                      placeholder="25"
+                      className="w-full bg-neutral-50 border border-neutral-200 rounded-xl p-2.5 text-xs font-bold outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-neutral-700 block mb-1">Height (cm)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      onKeyDown={preventNegativeKeys}
+                      onWheel={preventNegativeScroll}
+                      {...methods.register('height' as any)}
+                      placeholder="8"
+                      className="w-full bg-neutral-50 border border-neutral-200 rounded-xl p-2.5 text-xs font-bold outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* GST & Tax Configuration */}
+              <div className="md:col-span-3 pt-3 border-t border-neutral-100 space-y-3">
+                <h4 className="text-xs font-bold text-neutral-900 uppercase tracking-wider">GST &amp; Tax Configuration</h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* GST % */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-neutral-800">GST %</label>
+                    <select
+                      {...methods.register('taxPercentage')}
+                      className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                    >
+                      {[0, 3, 5, 12, 18, 28].map((rate) => (
+                        <option key={rate} value={rate}>
+                          {rate}%
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* HSN code */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-neutral-800">HSN Code (GST Classification)</label>
+                      <span className="text-[10px] text-neutral-400 font-medium">Optional (4 to 8 digits)</span>
+                    </div>
+                    <input
+                      type="text"
+                      {...methods.register('hsnCode')}
+                      placeholder="e.g. 6204 (Suits/Dresses), 5007 (Silk Garments)"
+                      className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                    />
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                      <span className="text-[10px] text-neutral-500 font-medium">Quick Select:</span>
+                      {[
+                        { code: '6204', label: '6204 (Dresses/Suits/Lehengas)' },
+                        { code: '5007', label: '5007 (Silk Outfits)' },
+                        { code: '6211', label: '6211 (Ethnic Wear)' },
+                        { code: '6214', label: '6214 (Dupattas/Shawls)' },
+                        { code: '6109', label: '6109 (Tops/Kurtis)' },
+                      ].map((item) => (
+                        <button
+                          key={item.code}
+                          type="button"
+                          onClick={() => methods.setValue('hsnCode', item.code, { shouldDirty: true })}
+                          className="text-[10px] font-bold bg-sky-50 text-[#0284c7] hover:bg-sky-100 border border-sky-200 px-2 py-0.5 rounded-md transition-all"
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-neutral-400">
+                      HSN is the 4–8 digit code printed on official GST tax invoices &amp; shipping manifests.
+                    </p>
+                  </div>
+
+                  {/* Tax inclusive */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-neutral-800">Tax Handling</label>
+                    <label className="flex items-center gap-3 cursor-pointer bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3">
+                      <input
+                        type="checkbox"
+                        {...methods.register('taxInclusive')}
+                        className="w-4 h-4 text-[#0284c7] rounded focus:ring-[#0284c7]"
+                      />
+                      <span className="text-xs font-bold text-neutral-800">Price includes GST</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Calculated Discount Pill Badge */}
+              <div className="md:col-span-3 bg-sky-50/80 border border-sky-100 p-4 rounded-2xl flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <h4 className="text-xs font-bold text-[#0284c7]">Calculated Customer Discount</h4>
+                  <p className="text-[11px] text-neutral-600">
+                    MRP: ₹{watchedValues?.basePrice || 0} → Selling Price: ₹{watchedValues?.salePrice || watchedValues?.basePrice || 0}
+                  </p>
+                </div>
+                {Boolean(watchedValues?.basePrice && Number(watchedValues.basePrice) > 0 && watchedValues?.salePrice && Number(watchedValues.salePrice) < Number(watchedValues.basePrice)) ? (
+                  <span className="text-xs font-bold text-sky-700 bg-sky-100 px-3.5 py-1.5 rounded-full border border-sky-200">
+                    {Math.round(((Number(watchedValues.basePrice) - Number(watchedValues.salePrice)) / Number(watchedValues.basePrice)) * 100)}% OFF
+                  </span>
+                ) : (
+                  <span className="text-xs font-semibold text-neutral-400">No discount applied</span>
+                )}
+              </div>
+            </div>
+
+            {/* COUPONS & OFFERS FOR THIS PRODUCT */}
+            <div className="pt-6 border-t border-neutral-100 space-y-4">
+              <div>
+                <h3 className="text-base font-bold text-neutral-900 flex items-center gap-2">
+                  <Tag className="w-5 h-5 text-[#0284c7]" />
+                  <span>Coupons &amp; Offers</span>
+                </h3>
+                <p className="text-xs text-neutral-500 font-medium mt-1">
+                  Attach coupons or offers that already exist on the Coupons &amp; Offers pages to this product. This form can&apos;t create new ones — only pick from what&apos;s already there.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Coupons checklist */}
+                <div className="space-y-2">
+                  <span className="text-xs font-bold text-neutral-800">Coupons ({coupons.length})</span>
+                  <div className="border border-neutral-200 rounded-2xl divide-y divide-neutral-100 max-h-60 overflow-y-auto bg-neutral-50/50">
+                    {coupons.length === 0 ? (
+                      <p className="p-4 text-xs text-neutral-400">No coupons created yet — add one on the Coupons page first.</p>
+                    ) : (
+                      coupons.map((c) => {
+                        const attachable = isProductAttachable(c.applicableTo);
+                        const checked = selectedCouponIds.includes(c.id);
+                        return (
+                          <label key={c.id} className={`flex items-start gap-3 p-3 ${attachable ? 'cursor-pointer hover:bg-white' : 'opacity-50 cursor-not-allowed'}`}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={!attachable}
+                              onChange={() =>
+                                setSelectedCouponIds((prev) =>
+                                  checked ? prev.filter((id) => id !== c.id) : [...prev, c.id],
+                                )
+                              }
+                              className="h-4 w-4 mt-0.5 rounded border-neutral-300 text-[#0284c7] focus:ring-[#0284c7]"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold font-mono text-neutral-900">{c.code}</span>
+                                <span className="text-[10px] font-semibold text-neutral-500">
+                                  {c.type === 'PERCENTAGE' ? `${c.value}% off` : c.type === 'FLAT' ? `₹${c.value} off` : 'Free shipping'}
+                                </span>
+                              </div>
+                              {!attachable && (
+                                <p className="text-[9px] text-amber-600 font-medium mt-0.5">
+                                  Already scoped to {String(c.applicableTo).toLowerCase()} elsewhere — can&apos;t attach here.
+                                </p>
+                              )}
+                            </div>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* Offers checklist */}
+                <div className="space-y-2">
+                  <span className="text-xs font-bold text-neutral-800">Offers ({offers.length})</span>
+                  <div className="border border-neutral-200 rounded-2xl divide-y divide-neutral-100 max-h-60 overflow-y-auto bg-neutral-50/50">
+                    {offers.length === 0 ? (
+                      <p className="p-4 text-xs text-neutral-400">No offers created yet — add one on the Offers page first.</p>
+                    ) : (
+                      offers.map((o) => {
+                        const attachable = isProductAttachable(o.applicableTo);
+                        const checked = selectedOfferIds.includes(o.id);
+                        return (
+                          <label key={o.id} className={`flex items-start gap-3 p-3 ${attachable ? 'cursor-pointer hover:bg-white' : 'opacity-50 cursor-not-allowed'}`}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={!attachable}
+                              onChange={() =>
+                                setSelectedOfferIds((prev) =>
+                                  checked ? prev.filter((id) => id !== o.id) : [...prev, o.id],
+                                )
+                              }
+                              className="h-4 w-4 mt-0.5 rounded border-neutral-300 text-[#0284c7] focus:ring-[#0284c7]"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-neutral-900 truncate">{o.name}</span>
+                                <span className="text-[10px] font-semibold text-neutral-500 shrink-0">{o.value}% off</span>
+                              </div>
+                              {!attachable && (
+                                <p className="text-[9px] text-amber-600 font-medium mt-0.5">
+                                  Already scoped to {String(o.applicableTo).toLowerCase()} elsewhere — can&apos;t attach here.
+                                </p>
+                              )}
+                            </div>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Live preview */}
+              {promoPreviewRows.length > 0 && (
+                <div className="space-y-2.5 bg-sky-50/80 border border-sky-100 p-4 rounded-2xl">
+                  <div>
+                    <h4 className="text-xs font-bold text-[#0284c7]">Preview — what a customer would actually pay</h4>
+                    <p className="text-[10px] text-neutral-600 mt-0.5">
+                      Based on today&apos;s Selling Price (₹{referencePrice.toLocaleString('en-IN')}). Only the single best discount applies at checkout — a coupon and an offer never stack.
+                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    {promoPreviewRows.map((row) => (
+                      <div key={row.key} className="flex items-center justify-between gap-3 bg-white rounded-xl border border-sky-100/80 px-3.5 py-2.5">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-bold font-mono text-neutral-900 truncate">{row.label}</p>
+                          <p className="text-[9px] text-neutral-400 truncate">{row.sub}</p>
+                          {row.note && <p className="text-[9px] text-amber-600 font-medium mt-0.5">{row.note}</p>}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-sm font-black text-[#0284c7]">₹{row.finalPrice.toLocaleString('en-IN')}</p>
+                          {row.discountAmount > 0 && (
+                            <p className="text-[9px] text-neutral-400 line-through">₹{referencePrice.toLocaleString('en-IN')}</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: COLOR GROUPS & COLOR-SPECIFIC MEDIA */}
+        {activeTab === 'colors' && (
+          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-sm space-y-6">
+            {/* DEDICATED STOREFRONT PRODUCT CARD VIEW IMAGE SELECTOR */}
+            <div className="p-5 bg-sky-50/80 rounded-2xl border border-sky-200/90 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-[#0284c7] text-white flex items-center justify-center font-bold text-sm shadow-2xs">
+                    💳
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-neutral-900 uppercase tracking-wider">
+                      Storefront Product Card View Image (Catalog Cover Photo)
+                    </h4>
+                    <p className="text-[11px] text-neutral-500 font-medium">
+                      Select or upload the exact image to display on Customer Storefront Product Cards (Homepage, Catalog Grid, Search).
+                    </p>
+                  </div>
+                </div>
+                {productCardImageUrl && (
+                  <span className="text-[10px] font-bold text-sky-800 bg-sky-100 border border-sky-300 px-3 py-1 rounded-full uppercase tracking-wider shadow-2xs">
+                    ✓ Custom Card Image Active
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4 bg-white p-3.5 rounded-xl border border-neutral-200 shadow-2xs">
+                {productCardImageUrl ? (
+                  <div className="relative w-20 h-24 rounded-lg overflow-hidden border border-neutral-300 shadow-2xs shrink-0 bg-neutral-100">
+                    <Image
+                      src={productCardImageUrl}
+                      alt="Product Card View Cover"
+                      fill
+                      unoptimized={isLocalOrPlaceholder(productCardImageUrl)}
+                      className="object-cover"
+                    />
+                  </div>
+                ) : (
+                  <div className="w-20 h-24 rounded-lg border-2 border-dashed border-sky-200 bg-sky-50/50 flex items-center justify-center text-xs text-sky-700 text-center p-2 font-bold shrink-0">
+                    Auto Primary
+                  </div>
+                )}
+
+                <div className="flex-1 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="cursor-pointer bg-[#0284c7] hover:bg-[#0B3B78] text-white text-xs font-bold px-4 py-2 rounded-xl transition-all flex items-center gap-1.5 shadow-2xs">
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload Storefront Card Image</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            try {
+                              const uploaded = await productService.uploadImage(file, file.name);
+                              if (uploaded?.url) {
+                                setCardViewImage(uploaded.url);
+                                return;
+                              }
+                            } catch (err) {
+                              console.warn('Card image upload failed, falling back to local preview:', err);
+                            }
+                            const reader = new FileReader();
+                            reader.onload = (ev) => {
+                              const url = ev.target?.result as string;
+                              if (url) {
+                                setCardViewImage(url);
+                              }
+                            };
+                            reader.readAsDataURL(file);
+                          }
+                        }}
+                      />
+                    </label>
+
+                    {productCardImageUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setProductCardImageUrl('')}
+                        className="bg-neutral-100 hover:bg-neutral-200 text-neutral-700 text-xs font-bold px-3 py-2 rounded-xl transition-all"
+                      >
+                        Reset to Default Primary
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Presets */}
+            <div className="space-y-2 pt-1">
+              <span className="text-xs font-bold text-neutral-700 block">Quick Color Presets:</span>
+              <div className="flex flex-wrap gap-2">
+                {COLOR_PRESETS.map((preset) => (
+                  <button
+                    key={preset.name}
+                    type="button"
+                    onClick={() => addColorGroup(preset.name, preset.hex)}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-neutral-200 bg-neutral-50 hover:bg-neutral-100 text-xs font-semibold text-neutral-800 transition-all hover:scale-105"
+                  >
+                    <span className="w-3.5 h-3.5 rounded-full border border-neutral-300" style={{ backgroundColor: preset.hex }} />
+                    <span>+ {preset.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Add Custom Color & Fabric Texture Swatch */}
+            <div className="p-5 bg-sky-50/50 rounded-2xl border border-sky-200/80 space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold text-[#0284c7] uppercase tracking-wider flex items-center gap-1.5">
+                  <Plus className="w-4 h-4" />
+                  <span>Step 1: Create Color Variant & Upload Fabric Texture Photo</span>
+                </h4>
+                <span className="text-[11px] text-neutral-500 font-medium">Upload texture photo, then proceed to add product images</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                {/* Color Hex & Name Input */}
+                <div className="md:col-span-7 flex items-center gap-2.5 bg-white p-2.5 rounded-xl border border-neutral-200 shadow-2xs">
+                  <input
+                    type="color"
+                    value={newColorHex}
+                    onChange={(e) => setNewColorHex(e.target.value)}
+                    className="w-8 h-8 rounded-lg cursor-pointer border-0 bg-transparent p-0 shrink-0"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Enter Color Name (e.g. Royal Blue, Emerald Green)"
+                    value={newColorName}
+                    onChange={(e) => setNewColorName(e.target.value)}
+                    className="flex-1 text-xs font-semibold text-neutral-900 focus:outline-none bg-transparent"
+                  />
+                </div>
+
+                {/* Upload Fabric Texture / Swatch Photo */}
+                <div className="md:col-span-5">
+                  <label className="cursor-pointer text-xs font-bold text-neutral-700 bg-white hover:bg-neutral-50 border border-neutral-200 p-2.5 rounded-xl flex items-center justify-between transition-all shadow-2xs">
+                    <div className="flex items-center gap-2 overflow-hidden">
+                      {newColorSwatch ? (
+                        <Image src={newColorSwatch} alt="swatch" width={22} height={22} className="w-5 h-5 rounded-full object-cover border border-neutral-300 shadow-2xs" unoptimized />
+                      ) : (
+                        <Palette className="w-4 h-4 text-[#0284c7]" />
+                      )}
+                      <span className="truncate text-xs font-bold text-neutral-800">
+                        {newColorSwatch ? '✓ Fabric Texture Photo Uploaded' : 'Upload Fabric Texture Photo'}
+                      </span>
+                    </div>
+                    <Upload className="w-4 h-4 text-[#0284c7] shrink-0" />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          try {
+                            const uploaded = await productService.uploadImage(file, file.name, 'swatches');
+                            if (uploaded?.url) {
+                              setNewColorSwatch(uploaded.url);
+                              return;
+                            }
+                          } catch (err) {
+                            console.warn('Swatch upload failed, falling back to local preview:', err);
+                          }
+                          const reader = new FileReader();
+                          reader.onload = (ev) => {
+                            const swatchUrl = ev.target?.result as string;
+                            if (swatchUrl) {
+                              setNewColorSwatch(swatchUrl);
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+
+
+              {/* Submit Button */}
+              <div className="flex items-center justify-between pt-1">
+                <div className="text-[11px] text-neutral-500 font-medium">
+                  {newColorName.trim() ? (
+                    <span className="text-emerald-700 font-bold">Ready to create color: &quot;{newColorName}&quot;</span>
+                  ) : (
+                    <span>Type a color name to proceed to product images upload</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => addColorGroup()}
+                  className="bg-[#0284c7] text-white text-xs font-bold px-6 py-2.5 rounded-xl hover:bg-[#0B3B78] transition-all flex items-center gap-1.5 shadow-md"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>+ Create Color Variant</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Color Tabs for Media Management */}
+            {colorGroups.length > 0 && (
+              <div className="space-y-4 pt-4 border-t border-neutral-100">
+                <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+                  {colorGroups.map((group) => (
+                    <button
+                      key={group.id}
+                      type="button"
+                      onClick={() => setActiveColorTab(group.id)}
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold transition-all shrink-0 ${
+                        activeColorTab === group.id
+                          ? 'border-[#0284c7] bg-sky-50 text-[#0284c7] shadow-2xs'
+                          : 'border-neutral-200 bg-white text-neutral-700 hover:border-neutral-300'
+                      }`}
+                    >
+                      {group.swatchImage ? (
+                        <Image
+                          src={group.swatchImage}
+                          alt={group.name}
+                          width={18}
+                          height={18}
+                          className="w-4 h-4 rounded-full object-cover border border-neutral-300 shadow-2xs shrink-0"
+                          unoptimized={isLocalOrPlaceholder(group.swatchImage)}
+                        />
+                      ) : (
+                        <span className="w-3.5 h-3.5 rounded-full border border-neutral-300 shrink-0" style={{ backgroundColor: group.hex }} />
+                      )}
+                      <span>{group.name}</span>
+                      <span className="bg-neutral-200 text-neutral-700 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                        {group.images.length}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Media Manager for Active Color Group */}
+                {colorGroups.find((c) => c.id === activeColorTab) && (
+                  <div className="p-6 bg-sky-50/40 rounded-2xl border border-sky-100 space-y-4">
+                    {(() => {
+                      const cur = colorGroups.find((c) => c.id === activeColorTab)!;
+                      return (
+                        <>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                              {cur.swatchImage ? (
+                                <Image
+                                  src={cur.swatchImage}
+                                  alt={cur.name}
+                                  width={24}
+                                  height={24}
+                                  className="w-6 h-6 rounded-full object-cover border border-neutral-300 shadow-2xs shrink-0"
+                                  unoptimized={isLocalOrPlaceholder(cur.swatchImage)}
+                                />
+                              ) : (
+                                <span className="w-4 h-4 rounded-full border border-neutral-300 shrink-0" style={{ backgroundColor: cur.hex }} />
+                              )}
+                              <h4 className="text-sm font-bold text-neutral-900">
+                                Product Images for &quot;{cur.name}&quot; ({cur.images.length} uploaded)
+                              </h4>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeColorGroup(cur.id)}
+                              className="text-xs font-bold text-sky-600 hover:underline flex items-center gap-1"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Delete Color Group</span>
+                            </button>
+                          </div>
+
+                          {/* Swatch Texture Image Display & Change Option */}
+                          <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-neutral-200 shadow-2xs">
+                            <div className="flex items-center gap-3">
+                              <span className="text-xs font-bold text-neutral-800">Fabric Texture Photo:</span>
+                              {cur.swatchImage ? (
+                                <div className="flex items-center gap-3 bg-emerald-50/70 border border-emerald-200/80 px-3 py-1.5 rounded-xl">
+                                  <Image
+                                    src={cur.swatchImage}
+                                    alt="Fabric Swatch"
+                                    width={36}
+                                    height={36}
+                                    className="w-9 h-9 rounded-lg object-cover border border-neutral-300 shadow-2xs shrink-0"
+                                    unoptimized={isLocalOrPlaceholder(cur.swatchImage)}
+                                  />
+                                  <div>
+                                    <span className="text-xs font-bold text-neutral-900 block">
+                                      Custom Texture Uploaded
+                                    </span>
+                                    <span className="text-[10px] font-bold text-emerald-700">
+                                      ✓ Active Swatch Photo
+                                    </span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeSwatchImage(cur.id)}
+                                    className="text-xs font-bold text-sky-600 hover:underline ml-2"
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-neutral-500 font-medium">Using Solid Color ({cur.hex})</span>
+                              )}
+                            </div>
+
+                            <label className="cursor-pointer text-xs font-bold text-[#0284c7] bg-sky-50 hover:bg-sky-100 border border-sky-200 px-3.5 py-1.5 rounded-xl flex items-center gap-1.5 transition-all">
+                              <Upload className="w-3.5 h-3.5" />
+                              <span>Upload Custom Swatch Image</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => handleSwatchImageUpload(cur.id, e.target.files?.[0])}
+                              />
+                            </label>
+                          </div>
+
+                          {/* Hidden Multi-File Input */}
+                          <input
+                            type="file"
+                            ref={fileInputRef}
+                            multiple
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => handleLocalImageUpload(cur.id, e.target.files)}
+                          />
+
+                          {/* Drag & Drop Upload Zone */}
+                          <div
+                            onDragOver={(e) => e.preventDefault()}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              handleLocalImageUpload(cur.id, e.dataTransfer.files);
+                            }}
+                            onClick={() => fileInputRef.current?.click()}
+                            className="border-2 border-dashed border-sky-200 hover:border-[#0284c7] bg-white hover:bg-sky-50/40 rounded-2xl p-6 text-center cursor-pointer transition-all space-y-2 group"
+                          >
+                            <div className="w-12 h-12 rounded-2xl bg-sky-50 text-[#0284c7] flex items-center justify-center mx-auto shadow-2xs group-hover:scale-110 transition-transform">
+                              <Upload className="w-6 h-6 text-[#0284c7]" />
+                            </div>
+                            <div>
+                              <h5 className="text-xs font-bold text-neutral-800">
+                                Upload Product Images for &quot;{cur.name}&quot;
+                              </h5>
+                              <p className="text-[11px] text-neutral-500 font-medium mt-0.5">
+                                Drag & drop image files here, or <span className="text-[#0284c7] font-bold underline">browse local files</span>
+                              </p>
+                            </div>
+                            <span className="inline-block text-[10px] text-neutral-400 font-semibold bg-neutral-100 px-2.5 py-1 rounded-full">
+                              Supports JPG, PNG, WEBP, AVIF (Select Multiple Files)
+                            </span>
+                          </div>
+
+                          {/* URL Input Fallback */}
+                          <div className="flex gap-2 pt-1">
+                            <input
+                              type="text"
+                              placeholder="Or paste Image URL (e.g. http://localhost:4000/storage/...)"
+                              value={imageUrlInput}
+                              onChange={(e) => setImageUrlInput(e.target.value)}
+                              className="flex-1 bg-white border border-neutral-200 rounded-xl px-4 py-2.5 text-xs text-neutral-900 font-medium focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => addImageToColorGroup(cur.id)}
+                              className="bg-[#0284c7] text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-[#0B3B78] shrink-0"
+                            >
+                              + Add URL Image
+                            </button>
+                          </div>
+
+                          {/* Gallery Thumbnails */}
+                          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-3 pt-2">
+                            {cur.images.map((img, idx) => (
+                              <div key={idx} className="group relative rounded-xl overflow-hidden aspect-[4/5] border border-neutral-200 bg-white shadow-2xs">
+                                <Image
+                                  src={img}
+                                  alt={`${cur.name} ${idx + 1}`}
+                                  fill
+                                  sizes="120px"
+                                  unoptimized={isLocalOrPlaceholder(img)}
+                                  className="object-cover"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeImageFromColorGroup(cur.id, idx)}
+                                  className="absolute top-2 right-2 w-7 h-7 rounded-full bg-black/70 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                                  title="Remove"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+
+                                {/* Reorder — position 0 is the primary */}
+                                <div className="absolute top-2 left-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button
+                                    type="button"
+                                    onClick={() => moveImage(cur.id, idx, -1)}
+                                    disabled={idx === 0}
+                                    className="w-6 h-6 rounded-full bg-black/70 text-white flex items-center justify-center disabled:opacity-30"
+                                    title="Move earlier"
+                                  >
+                                    <ChevronLeft className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => moveImage(cur.id, idx, 1)}
+                                    disabled={idx === cur.images.length - 1}
+                                    className="w-6 h-6 rounded-full bg-black/70 text-white flex items-center justify-center disabled:opacity-30"
+                                    title="Move later"
+                                  >
+                                    <ChevronRight className="w-3 h-3" />
+                                  </button>
+                                </div>
+
+                                {idx === 0 ? (
+                                  <span className="absolute bottom-9 left-2 bg-[#0284c7] text-white text-[9px] font-bold px-2 py-0.5 rounded-md">
+                                    PRIMARY
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => setPrimaryImage(cur.id, idx)}
+                                    className="absolute bottom-9 left-2 bg-black/70 text-white text-[9px] font-bold px-2 py-0.5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+                                  >
+                                    SET PRIMARY
+                                  </button>
+                                )}
+
+                                {/* Shot type */}
+                                <select
+                                  value={imageLabels[img] ?? ''}
+                                  onChange={(e) =>
+                                    setImageLabels((prev) => ({ ...prev, [img]: e.target.value }))
+                                  }
+                                  className="absolute bottom-0 inset-x-0 bg-white/95 border-t border-neutral-200 text-[9px] font-bold text-neutral-700 px-1.5 py-1 focus:outline-none"
+                                >
+                                  <option value="">Type…</option>
+                                  {IMAGE_TYPES.map((label) => (
+                                    <option key={label} value={label}>
+                                      {label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 4: COLOR-WISE SIZES & STOCK */}
+        {activeTab === 'sizes' && (
+          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-sm space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h3 className="text-base font-bold text-neutral-900 flex items-center gap-2">
+                  <Ruler className="w-5 h-5 text-[#0284c7]" />
+                  <span>Color-Wise Sizes, Stock &amp; SKU Management</span>
+                </h3>
+                <p className="text-xs text-neutral-500 font-medium mt-0.5">
+                  Configure size availability, inventory, and unique barcode SKU IDs per color group
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setColorGroups((prev) =>
+                    prev.map((g) => ({
+                      ...g,
+                      sizes: g.sizes.map((s) => ({
+                        ...s,
+                        sku: buildSmartVariantSku(g.name, s.size),
+                      })),
+                    }))
+                  );
+                }}
+                className="text-xs font-bold text-[#0284c7] bg-sky-50 border border-sky-200 px-3.5 py-2 rounded-xl hover:bg-sky-100 transition-all flex items-center gap-1.5 shadow-2xs"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>Auto-Generate All SKU IDs</span>
+              </button>
+            </div>
+
+            {/* Size chart template */}
+            <div className="rounded-2xl border border-neutral-200 bg-neutral-50/60 p-5 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                  <label className="text-xs font-bold text-neutral-800">Size Chart</label>
+                  <p className="text-[11px] text-neutral-500">
+                    Measurements are defined once per garment shape and reused. Manage them under
+                    Catalog &rarr; Size Charts.
+                  </p>
+                </div>
+                <select
+                  value={sizeChartTemplateId}
+                  onChange={(e) => setSizeChartTemplateId(e.target.value)}
+                  className="w-full sm:w-72 bg-white border border-neutral-200 rounded-xl px-4 py-2.5 text-xs text-neutral-900 font-medium focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                >
+                  <option value="">No size chart</option>
+                  {sizeCharts.map((chart) => (
+                    <option key={chart.id} value={chart.id}>
+                      {chart.name}
+                      {chart.garmentType ? ` — ${chart.garmentType}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedSizeChart && selectedSizeChart.rows.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[11px] border-collapse">
+                    <thead>
+                      <tr className="text-left text-neutral-500">
+                        <th className="py-1.5 pr-4 font-bold">SIZE</th>
+                        {Object.keys(selectedSizeChart.rows[0].measurements).map((key) => (
+                          <th key={key} className="py-1.5 pr-4 font-bold whitespace-nowrap">
+                            {key.toUpperCase()}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedSizeChart.rows.map((row) => (
+                        <tr key={row.size} className="border-t border-neutral-200">
+                          <td className="py-1.5 pr-4 font-bold text-neutral-800">{row.size}</td>
+                          {Object.keys(selectedSizeChart.rows[0].measurements).map((key) => (
+                            <td key={key} className="py-1.5 pr-4 text-neutral-600">
+                              {row.measurements[key] ?? '—'}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="text-[10px] text-neutral-400 mt-2">
+                    All measurements in {selectedSizeChart.unit}.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Size Management per Color */}
+            <div className="space-y-6">
+              {colorGroups.map((group) => (
+                <div key={group.id} className="p-6 bg-neutral-50/80 rounded-2xl border border-neutral-200 space-y-4">
+                  
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200/80 pb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="w-4 h-4 rounded-full border border-neutral-300 shadow-2xs shrink-0" style={{ backgroundColor: group.hex }} />
+                      <h4 className="text-sm font-bold text-neutral-900">
+                        Sizes &amp; Custom Prices for &quot;{group.name}&quot;
+                      </h4>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const base = Number(methods.getValues('basePrice')) || 0;
+                          applyPriceToAllSizes(group.id, base > 0 ? base : undefined);
+                        }}
+                        className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg hover:bg-emerald-100 transition-all cursor-pointer"
+                        title="Reset all size prices in this color to the product default MRP"
+                      >
+                        🏷️ Reset All to Base Price (₹{watchedValues?.basePrice || 0})
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => applyPlusSizeIncrements(group.id, 100)}
+                        className="text-[11px] font-bold text-sky-700 bg-sky-50 border border-sky-200 px-2.5 py-1 rounded-lg hover:bg-sky-100 transition-all cursor-pointer"
+                        title="Add +₹100 for 2XL/3XL, +₹200 for 4XL, +₹300 for 5XL"
+                      >
+                        📈 +₹100 for Plus Sizes (2XL+)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setColorGroups((prev) =>
+                            prev.map((g) => {
+                              if (g.id === group.id) {
+                                return {
+                                  ...g,
+                                  sizes: STANDARD_SIZES.map((sz) => {
+                                    const existing = g.sizes.find((s) => s.size === sz);
+                                    return (
+                                      existing || {
+                                        size: sz,
+                                        stock: 15,
+                                        price: undefined,
+                                        salePrice: undefined,
+                                        available: true,
+                                        sku: buildSmartVariantSku(g.name, sz),
+                                      }
+                                    );
+                                  }),
+                                };
+                              }
+                              return g;
+                            })
+                          );
+                        }}
+                        className="text-[11px] font-bold text-[#0284c7] bg-sky-50 border border-sky-200 px-2.5 py-1 rounded-lg hover:bg-sky-100 transition-all cursor-pointer"
+                      >
+                        ⚡ Add All Standard Sizes (XS–5XL)
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Sizes List Table */}
+                  <div className="space-y-2.5">
+                    {group.sizes.map((sz) => (
+                      <div
+                        key={sz.size}
+                        className="p-3.5 bg-white border border-neutral-200 rounded-2xl shadow-2xs hover:border-sky-200 transition-colors space-y-3"
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          {/* Left: Size Toggle & SKU */}
+                          <div className="flex items-start sm:items-center gap-3 min-w-0">
+                            <button
+                              type="button"
+                              onClick={() => toggleSizeAvailability(group.id, sz.size)}
+                              className={`w-10 h-10 rounded-xl border flex items-center justify-center font-bold text-xs transition-all cursor-pointer shrink-0 ${
+                                sz.available
+                                  ? 'bg-[#0284c7] text-white border-[#0284c7] shadow-2xs'
+                                  : 'bg-neutral-100 text-neutral-400 border-neutral-200 line-through'
+                              }`}
+                              title={sz.available ? 'Click to disable size' : 'Click to enable size'}
+                            >
+                              {sz.size}
+                            </button>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-bold text-neutral-900">
+                                  Size {sz.size}
+                                </span>
+                                {sz.price && sz.price > 0 ? (
+                                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                                    Separate Price: ₹{sz.price.toLocaleString('en-IN')}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-medium text-neutral-400 bg-neutral-100 px-2 py-0.5 rounded-md">
+                                    Inherits Base Price
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                                <span className="text-[10px] font-bold text-sky-700 font-mono">SKU:</span>
+                                <input
+                                  type="text"
+                                  value={sz.sku || ''}
+                                  onChange={(e) => updateSizeField(group.id, sz.size, 'sku', e.target.value.toUpperCase())}
+                                  placeholder="SKU-ID"
+                                  className="bg-sky-50/80 border border-sky-200 rounded px-2 py-0.5 text-[10px] font-mono font-bold text-neutral-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#0284c7] uppercase w-32 sm:w-36 shadow-2xs"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Right: Actions */}
+                          <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 border-t sm:border-t-0 pt-2 sm:pt-0 border-neutral-100">
+                            {(() => {
+                              const status = stockStatus(sz.stock, sz.minStock);
+                              return (
+                                <span
+                                  className={`text-[10px] font-bold uppercase tracking-wide px-2.5 py-1 rounded-lg border ${status.className}`}
+                                >
+                                  {status.label}
+                                </span>
+                              );
+                            })()}
+
+                            <button
+                              type="button"
+                              onClick={() => removeSizeFromColorGroup(group.id, sz.size)}
+                              className="text-neutral-400 hover:text-rose-600 p-1.5 transition-colors cursor-pointer ml-auto sm:ml-0"
+                              title="Delete this size variant"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Separate Price, Sale Price, Stock, and Min Alert Controls */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 border-t border-neutral-100 text-xs">
+                          {/* Size-Specific Price (MRP) */}
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-bold text-neutral-700 flex items-center justify-between">
+                              <span>Size Price (₹)</span>
+                              <span className="text-[9px] text-neutral-400 font-normal">MRP / Base</span>
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              onKeyDown={preventNegativeKeys}
+                              onWheel={preventNegativeScroll}
+                              value={sz.price !== undefined && sz.price !== null ? sz.price : ''}
+                              placeholder={`Default (₹${watchedValues?.basePrice || 0})`}
+                              onChange={(e) => {
+                                const val = e.target.value === '' ? undefined : Math.max(0, Number(e.target.value) || 0);
+                                updateSizeField(group.id, sz.size, 'price', val);
+                              }}
+                              className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-2.5 py-1.5 text-xs text-neutral-900 font-bold focus:bg-white focus:outline-none focus:border-[#0284c7]"
+                            />
+                          </div>
+
+                          {/* Size-Specific Sale Price */}
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-bold text-neutral-700 flex items-center justify-between">
+                              <span>Sale Price (₹)</span>
+                              <span className="text-[9px] text-neutral-400 font-normal">Optional</span>
+                            </label>
+                            <input
+                              type="number"
+                              min="0"
+                              onKeyDown={preventNegativeKeys}
+                              onWheel={preventNegativeScroll}
+                              value={sz.salePrice !== undefined && sz.salePrice !== null ? sz.salePrice : ''}
+                              placeholder={`Default (₹${watchedValues?.salePrice || watchedValues?.basePrice || 0})`}
+                              onChange={(e) => {
+                                const val = e.target.value === '' ? undefined : Math.max(0, Number(e.target.value) || 0);
+                                updateSizeField(group.id, sz.size, 'salePrice', val);
+                              }}
+                              className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-2.5 py-1.5 text-xs text-neutral-900 font-bold focus:bg-white focus:outline-none focus:border-[#0284c7]"
+                            />
+                          </div>
+
+                          {/* Available Stock */}
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-bold text-neutral-700 block">Stock Qty</label>
+                            <input
+                              type="number"
+                              min="0"
+                              onKeyDown={preventNegativeKeys}
+                              onWheel={preventNegativeScroll}
+                              value={sz.stock}
+                              onChange={(e) => updateSizeStock(group.id, sz.size, Math.max(0, Math.floor(Number(e.target.value) || 0)))}
+                              className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-2.5 py-1.5 text-xs text-neutral-900 font-bold focus:bg-white focus:outline-none focus:border-[#0284c7] text-center"
+                            />
+                          </div>
+
+                          {/* Low Stock Alert */}
+                          <div className="space-y-1">
+                            <label className="text-[11px] font-bold text-neutral-700 block">Min Alert</label>
+                            <input
+                              type="number"
+                              min="0"
+                              onKeyDown={preventNegativeKeys}
+                              onWheel={preventNegativeScroll}
+                              value={sz.minStock ?? ''}
+                              placeholder="5"
+                              onChange={(e) =>
+                                updateSizeField(group.id, sz.size, 'minStock', e.target.value === '' ? undefined : Math.max(0, Math.floor(Number(e.target.value) || 0)))
+                              }
+                              className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-2.5 py-1.5 text-xs text-neutral-900 font-bold focus:bg-white focus:outline-none focus:border-[#0284c7] text-center"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Add Size Controls */}
+                  <div className="flex gap-2 pt-2">
+                    <input
+                      type="text"
+                      placeholder="Add custom size (e.g. 4XL, 5XL, FREE SIZE)"
+                      id={`custom-size-input-${group.id}`}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = (e.currentTarget.value || '').trim().toUpperCase();
+                          if (val) {
+                            setColorGroups((prev) =>
+                              prev.map((g) => {
+                                if (g.id === group.id) {
+                                  const exists = g.sizes.some(
+                                    (s) => s.size.toLowerCase().trim() === val.toLowerCase().trim()
+                                  );
+                                  if (exists) return g;
+                                  return {
+                                    ...g,
+                                    sizes: [
+                                      ...g.sizes,
+                                      {
+                                        size: val,
+                                        stock: 10,
+                                        available: true,
+                                        sku: buildSmartVariantSku(g.name, val),
+                                      },
+                                    ],
+                                  };
+                                }
+                                return g;
+                              })
+                            );
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                      className="flex-1 bg-white border border-neutral-200 rounded-xl px-4 py-2 text-xs text-neutral-900 font-medium focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const inputEl = document.getElementById(`custom-size-input-${group.id}`) as HTMLInputElement | null;
+                        const val = (inputEl?.value || '').trim().toUpperCase();
+                        if (val) {
+                          setColorGroups((prev) =>
+                            prev.map((g) => {
+                              if (g.id === group.id) {
+                                const exists = g.sizes.some(
+                                  (s) => s.size.toLowerCase().trim() === val.toLowerCase().trim()
+                                );
+                                if (exists) {
+                                  alert(`Size "${val}" already exists for "${g.name}".`);
+                                  return g;
+                                }
+                                return {
+                                  ...g,
+                                  sizes: [
+                                    ...g.sizes,
+                                    {
+                                      size: val,
+                                      stock: 10,
+                                      available: true,
+                                      sku: buildSmartVariantSku(g.name, val),
+                                    },
+                                  ],
+                                };
+                              }
+                              return g;
+                            })
+                          );
+                          if (inputEl) inputEl.value = '';
+                        }
+                      }}
+                      className="bg-neutral-900 hover:bg-neutral-800 text-white text-xs font-bold px-4 py-2 rounded-xl transition-all shadow-2xs"
+                    >
+                      + Add Size
+                    </button>
+                  </div>
+
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 5: BADGES & SEO */}
+        {/* TAB 6: DYNAMIC ATTRIBUTES */}
+        {activeTab === 'attributes' && (
+          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-sm space-y-6">
+            <h3 className="text-base font-bold text-neutral-900 flex items-center gap-2">
+              <ListChecks className="w-5 h-5 text-[#0284c7]" />
+              <span>Product Attributes</span>
+            </h3>
+            <p className="text-[11px] text-neutral-500 -mt-4">
+              These drive the storefront filters. Managed under Catalog &rarr; Attributes — no
+              developer needed to add a new one. Colour and size are configured on their own tabs.
+            </p>
+
+            {productAttributes.length === 0 ? (
+              <p className="text-xs font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                No attributes defined yet. Add them under Catalog &rarr; Attributes.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {productAttributes.map((attribute) => {
+                  const value = attributeValues[attribute.id] ?? '';
+                  const hasOptions = (attribute.options?.length ?? 0) > 0;
+                  return (
+                    <div key={attribute.id} className="space-y-1.5">
+                      <label className="text-xs font-bold text-neutral-800">
+                        {attribute.name}
+                        {attribute.isRequired && <span className="text-sky-600"> *</span>}
+                      </label>
+
+                      {hasOptions ? (
+                        <select
+                          value={value}
+                          onChange={(e) => setAttributeValue(attribute.id, e.target.value)}
+                          className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                        >
+                          <option value="">Not specified</option>
+                          {attribute.options?.map((option) => (
+                            <option key={option.id} value={option.value}>
+                              {option.label || option.value}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type={attribute.type === AttributeType.NUMBER ? 'number' : 'text'}
+                          value={value}
+                          onChange={(e) => setAttributeValue(attribute.id, e.target.value)}
+                          placeholder={attribute.description || `e.g. ${attribute.name}`}
+                          className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <AiContentAssistant
+              candidates={aiCandidates}
+              referenceImages={aiReferenceImages}
+            />
+          </div>
+        )}
+
+        {activeTab === 'seo' && (
+          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-neutral-200 shadow-sm space-y-6">
+            <h3 className="text-base font-bold text-neutral-900 flex items-center gap-2">
+              <Tag className="w-5 h-5 text-[#0284c7]" />
+              <span>Badges, Homepage Display &amp; SEO</span>
+            </h3>
+
+            {/* PRE-PUBLISH VALIDATION */}
+            {validationIssues.length > 0 ? (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <AlertTriangle className="w-4 h-4 text-amber-600" />
+                  <h4 className="text-xs font-bold text-amber-800 uppercase tracking-wide">
+                    Product cannot be published — {validationIssues.length} issue
+                    {validationIssues.length === 1 ? '' : 's'} found
+                  </h4>
+                </div>
+                <ul className="space-y-1.5">
+                  {validationIssues.map((issue) => (
+                    <li key={issue} className="text-[11px] font-semibold text-amber-800 flex gap-2">
+                      <span className="text-amber-500">✕</span>
+                      <span>{issue}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[11px] text-amber-700 mt-3">
+                  You can still save this as a draft — untick &ldquo;Published&rdquo; below.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span className="text-xs font-bold text-emerald-800">
+                  All checks passed — ready to publish.
+                </span>
+              </div>
+            )}
+
+            {/* Badges Toggles */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 p-5 bg-neutral-50 rounded-2xl border border-neutral-200">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  {...methods.register('isNewArrival')}
+                  className="w-4 h-4 text-[#0284c7] rounded focus:ring-[#0284c7]"
+                />
+                <span className="text-xs font-bold text-neutral-800">New Arrival Badge</span>
+              </label>
+
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  {...methods.register('isBestSeller')}
+                  className="w-4 h-4 text-[#0284c7] rounded focus:ring-[#0284c7]"
+                />
+                <span className="text-xs font-bold text-neutral-800">Best Seller Badge</span>
+              </label>
+
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  {...methods.register('isFeatured')}
+                  className="w-4 h-4 text-[#0284c7] rounded focus:ring-[#0284c7]"
+                />
+                <span className="text-xs font-bold text-neutral-800">Featured Banner</span>
+              </label>
+
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  {...methods.register('isTrending')}
+                  className="w-4 h-4 text-[#0284c7] rounded focus:ring-[#0284c7]"
+                />
+                <span className="text-xs font-bold text-neutral-800">Trending Section</span>
+              </label>
+
+              {/* Limited Stock (Commented out: already configured as dedicated toggle card in Tab 1 Basic Information) */}
+              {/*
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  {...methods.register('isLimitedStock')}
+                  className="w-4 h-4 text-[#0284c7] rounded focus:ring-[#0284c7]"
+                />
+                <span className="text-xs font-bold text-neutral-800">Limited Stock</span>
+              </label>
+              */}
+
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  {...methods.register('isFestivePick')}
+                  className="w-4 h-4 text-[#0284c7] rounded focus:ring-[#0284c7]"
+                />
+                <span className="text-xs font-bold text-neutral-800">Festive Pick</span>
+              </label>
+
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  {...methods.register('isExclusive')}
+                  className="w-4 h-4 text-[#0284c7] rounded focus:ring-[#0284c7]"
+                />
+                <span className="text-xs font-bold text-neutral-800">Exclusive</span>
+              </label>
+            </div>
+
+            {/* Where to Sell -- the last decision before Save, since Save is what
+                issues this product's barcode/sticker (see the "ISSUED BARCODES"
+                panel above the tabs). Stock is one shared pool either way; this
+                only controls where the product is offered. */}
+            <div className="p-5 bg-neutral-50 rounded-2xl border border-neutral-200 space-y-3">
+              <div>
+                <span className="text-xs font-bold text-neutral-800">Where should this product be sold?</span>
+                <p className="text-[11px] text-neutral-500 mt-0.5">
+                  Stock stays the same either way — this only controls where the product is offered for sale.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {(
+                  [
+                    {
+                      value: 'STORE' as const,
+                      label: 'Store Only',
+                      desc: 'Sellable at the POS counter. Hidden from the online website.',
+                      Icon: Store,
+                    },
+                    {
+                      value: 'ONLINE' as const,
+                      label: 'Online Only',
+                      desc: 'Shown on the website. Not sellable at the POS counter.',
+                      Icon: Globe,
+                    },
+                    {
+                      value: 'BOTH' as const,
+                      label: 'Store & Online',
+                      desc: 'Sellable at the counter and shown on the website.',
+                      Icon: Layers,
+                    },
+                  ]
+                ).map(({ value, label, desc, Icon }) => {
+                  const selected = methods.watch('channel') === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => methods.setValue('channel', value, { shouldValidate: true, shouldDirty: true })}
+                      className={`text-left p-4 rounded-xl border-2 transition-colors ${
+                        selected
+                          ? 'border-[#0284c7] bg-[#0284c7]/5'
+                          : 'border-neutral-200 bg-white hover:border-neutral-300'
+                      }`}
+                    >
+                      <Icon className={`w-5 h-5 mb-2 ${selected ? 'text-[#0284c7]' : 'text-neutral-400'}`} />
+                      <div className={`text-xs font-bold ${selected ? 'text-[#0284c7]' : 'text-neutral-800'}`}>
+                        {label}
+                      </div>
+                      <div className="text-[11px] text-neutral-500 mt-1 leading-snug">{desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* SEO Inputs */}
+            <div className="space-y-4 pt-2">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">SEO Page Title</label>
+                <input
+                  type="text"
+                  {...methods.register('seoTitle')}
+                  placeholder="Buy Designer Anarkali Suit Online | Vasanthi Designers"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">Meta Description</label>
+                <textarea
+                  rows={2}
+                  {...methods.register('seoDescription')}
+                  placeholder="Shop exclusive luxury ethnic wear with fast shipping..."
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl p-4 text-xs text-neutral-900 font-medium focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-neutral-800">SEO Keywords</label>
+                <input
+                  type="text"
+                  {...methods.register('seoKeywords')}
+                  placeholder="anarkali, kurta set, women's ethnic wear, floral kurta"
+                  className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-4 py-3 text-xs text-neutral-900 font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0284c7]/20"
+                />
+                <p className="text-[10px] text-neutral-400">Comma separated.</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'barcodes' && (
+          <div className="bg-neutral-900 text-white rounded-3xl p-6 sm:p-8 space-y-6 shadow-xl border border-neutral-800">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800 pb-5">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <QrCode className="w-5 h-5 text-amber-400" />
+                  <span>SKU Barcode Label &amp; Sticker Generator</span>
+                </h3>
+                <p className="text-xs text-neutral-400 mt-1">
+                  Generate, print, and download barcode &amp; QR tag stickers based on Color, Size, Stock, and Price for physical garment attachment.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={generateBarcodeVariants}
+                  className="bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-neutral-950 text-xs font-black px-4 py-2.5 rounded-xl flex items-center gap-2 shadow-md transition-all active:scale-95 cursor-pointer"
+                  title="Generate barcodes & QR codes for all sizes and color variants"
+                >
+                  <Sparkles className="w-4 h-4 text-neutral-950" />
+                  <span>Generate Barcodes ({totalActiveSizes})</span>
+                </button>
+
+                <div className="flex items-center gap-2 bg-neutral-800 p-1.5 rounded-xl border border-neutral-700">
+                  <span className="text-[11px] font-bold text-neutral-400 pl-2">Label Size:</span>
+                  {LABEL_SIZE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setLabelSize(opt.value)}
+                      title={opt.description}
+                      className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold transition-all ${
+                        labelSize === opt.value
+                          ? 'bg-amber-500 border-amber-500 text-neutral-950 shadow-sm'
+                          : 'bg-neutral-900 border-neutral-700 text-neutral-300 hover:bg-neutral-800'
+                      }`}
+                    >
+                      {opt.title}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handlePrintAllLabels}
+                  disabled={issuedVariants.length === 0 || printingSku !== null}
+                  className="bg-[#0284c7] hover:bg-sky-500 text-white text-xs font-bold px-5 py-2.5 rounded-xl flex items-center gap-2 disabled:opacity-50 transition-all shadow-md cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Print All {issuedVariants.length} Labels</span>
+                </button>
+              </div>
+            </div>
+
+            {issuedVariants.length === 0 ? (
+              <div className="p-8 text-center bg-neutral-800/50 border border-neutral-800 rounded-2xl space-y-4">
+                <QrCode className="w-12 h-12 text-amber-400 mx-auto animate-pulse" />
+                <h4 className="text-sm font-bold text-neutral-200">Generate Barcode Stickers For Your Configured Variants</h4>
+                <p className="text-xs text-neutral-400 max-w-md mx-auto">
+                  Instantly generate SKU barcodes &amp; QR codes for all {totalActiveSizes} configured color and size variations with one click.
+                </p>
+                <button
+                  type="button"
+                  onClick={generateBarcodeVariants}
+                  className="bg-amber-500 hover:bg-amber-400 text-neutral-950 font-black text-xs px-6 py-3 rounded-2xl flex items-center gap-2 mx-auto shadow-lg hover:shadow-amber-500/20 transition-all active:scale-95 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4 text-neutral-950" />
+                  <span>Generate Barcodes &amp; QR Codes Now ({totalActiveSizes} SKUs)</span>
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                {issuedVariants.map((variant) => (
+                  <div
+                    key={variant.sku}
+                    className="bg-white rounded-3xl p-5 border-2 border-dashed border-neutral-300 shadow-md text-neutral-900 font-sans flex flex-col items-center text-center relative overflow-hidden"
+                  >
+                    {/* Header: Blue Diamond + VASANTHI DESIGNERS */}
+                    <div className="flex items-center justify-center gap-1 text-center">
+                      <span className="text-[#0284c7] font-bold text-xs">❖</span>
+                    </div>
+                    <div className="text-sm font-extrabold tracking-wider uppercase text-neutral-900 font-serif">
+                      VASANTHI DESIGNERS
+                    </div>
+                    <div className="w-full border-b border-neutral-200 my-2" />
+
+                    {/* Product Title | Color / Size */}
+                    <div className="text-xs font-bold text-neutral-800 line-clamp-1">
+                      {productName} | {variant.title}
+                    </div>
+
+                    {/* Black SKU Pill Badge */}
+                    <div className="my-2.5 bg-neutral-950 text-white rounded-full px-5 py-1 text-xs font-mono font-bold tracking-widest shadow-xs">
+                      {variant.sku}
+                    </div>
+
+                    {/* Barcode + QR Code Side by Side */}
+                    {variant.barcode || variant.sku ? (
+                      <div className="flex items-center justify-center gap-3 my-1 py-1 w-full">
+                        <div className="flex flex-col items-center">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={generateCode128SvgDataUrl(variant.barcode || variant.sku, 48, 2)}
+                            alt={`Barcode ${variant.barcode || variant.sku}`}
+                            className="h-12 max-w-[140px] object-contain"
+                          />
+                          <span className="text-[10px] font-mono text-neutral-700 tracking-wider font-semibold -mt-1">
+                            {variant.barcode || variant.sku}
+                          </span>
+                          <span className="text-[9px] font-mono text-neutral-500 tracking-wider">
+                            {variant.sku}
+                          </span>
+                        </div>
+
+                        <div className="h-12 border-r border-dashed border-neutral-300 mx-1" />
+
+                        <div className="flex flex-col items-center">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={generateQrCodeSvgDataUrl(variant.barcode || variant.sku, 120)}
+                            alt={`QR ${variant.barcode || variant.sku}`}
+                            className="h-12 w-12 object-contain"
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-xs text-neutral-400 my-4">Generating barcode...</div>
+                    )}
+
+                    {/* Bottom Line Divider & Bold Price */}
+                    <div className="w-full border-b border-neutral-200 my-2" />
+                    <div className="text-2xl font-black text-black font-sans tracking-tight">
+                      ₹{variant.price}
+                    </div>
+
+                    {/* Print Controls at bottom */}
+                    <div className="flex items-center gap-2 mt-4 w-full pt-3 border-t border-neutral-100">
+                      <div className="flex items-center gap-1 bg-neutral-100 border border-neutral-200 rounded-xl px-2.5 py-1.5">
+                        <span className="text-[10px] font-bold text-neutral-600">Qty:</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={labelQtyBySku[variant.sku] ?? 1}
+                          onChange={(e) =>
+                            setLabelQtyBySku((prev) => ({
+                              ...prev,
+                              [variant.sku]: Math.max(1, Number(e.target.value) || 1),
+                            }))
+                          }
+                          className="w-10 bg-transparent text-xs text-neutral-900 font-bold text-center outline-none"
+                          title="Copies to print"
+                        />
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handlePrintLabel(variant)}
+                        disabled={!variant.barcode || printingSku === variant.sku}
+                        className="flex-1 bg-neutral-950 hover:bg-neutral-800 text-white text-xs font-bold py-2.5 rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-50 transition-all shadow-sm"
+                      >
+                        {printingSku === variant.sku ? (
+                          <span>Printing…</span>
+                        ) : (
+                          <>
+                            <Printer className="w-3.5 h-3.5" />
+                            <span>Print Sticker</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* REAL-TIME LIVE DESKTOP CUSTOMER PREVIEW SECTION (AT BOTTOM) */}
+        <div className="pt-6">
+          <LiveDesktopProductPreview data={deferredPreviewData} />
+        </div>
+
+      </form>
+    </FormProvider>
+  );
+}

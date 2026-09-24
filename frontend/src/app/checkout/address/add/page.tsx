@@ -1,0 +1,202 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, Loader2, CheckCircle2 } from 'lucide-react';
+import { StorefrontFooter } from '@/components/layout/StorefrontFooter';
+import { useAuth } from '@/hooks/useAuth';
+import { usePincodeLookup } from '@/hooks/usePincodeLookup';
+import { customerMeService } from '@/features/customer/me.service';
+import { useQueryClient } from '@tanstack/react-query';
+import { customerKeys } from '@/features/customer/hooks';
+import { getApiErrorMessage } from '@/utils/api-error';
+import { validatePhone, validatePincode, validateRequired } from '@/utils/validators';
+
+const empty = {
+  fullName: '',
+  phone: '',
+  addressLine1: '',
+  addressLine2: '',
+  postalCode: '',
+  city: '',
+  state: '',
+  country: 'India',
+  isDefaultShipping: true,
+};
+
+export default function AddAddressPage() {
+  const router = useRouter();
+  const { isAuthenticated, isInitializing } = useAuth();
+  const qc = useQueryClient();
+  const [form, setForm] = useState(empty);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [pincodeFilled, setPincodeFilled] = useState(false);
+  const { lookup: lookupPincode, isLoading: pincodeLoading, notFound: pincodeNotFound } = usePincodeLookup();
+
+  const handlePostalCodeChange = (value: string) => {
+    const digits = value.replace(/\D/g, '').slice(0, 6);
+    setForm((f) => ({ ...f, postalCode: digits }));
+    setPincodeFilled(false);
+    if (digits.length === 6) {
+      lookupPincode(digits).then((result) => {
+        if (result) {
+          setForm((f) => ({ ...f, city: result.city, state: result.state }));
+          setPincodeFilled(true);
+        }
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (!isInitializing && !isAuthenticated) {
+      router.push('/login?redirect=/checkout/address/add');
+    }
+  }, [isInitializing, isAuthenticated, router]);
+
+  if (isInitializing || !isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-[var(--page-bg)] flex flex-col items-center justify-center p-4">
+        <div className="bg-white border border-neutral-200 rounded-3xl p-8 max-w-sm w-full text-center space-y-4 shadow-md animate-fadeIn">
+          <div className="w-12 h-12 rounded-2xl bg-sky-50 text-[var(--brand-primary)] flex items-center justify-center mx-auto">
+            <Loader2 className="w-6 h-6 animate-spin text-[var(--brand-primary)]" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-base font-bold text-neutral-900 font-serif">Add Address</h3>
+            <p className="text-xs text-neutral-500">Redirecting to login...</p>
+          </div>
+          <Link
+            href="/login?redirect=/checkout/address/add"
+            className="block w-full py-3 bg-[var(--brand-primary)] text-white rounded-xl text-xs font-bold hover:opacity-95 shadow-xs"
+          >
+            Click here to Login
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  const validateField = (key: string, val: string) => {
+    if (key === 'addressLine2') return '';
+    if (key === 'phone') return validatePhone(val) ?? '';
+    if (key === 'postalCode') return validatePincode(val) ?? '';
+    return validateRequired(val, 'This field') ?? '';
+  };
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    let hasErr = false;
+    (Object.keys(empty) as Array<keyof typeof empty>).forEach((k) => {
+      if (validateField(k, String(form[k] || ''))) hasErr = true;
+    });
+
+    if (hasErr) {
+      setError('Please fill in all required address fields correctly.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const created = await customerMeService.createAddress(form);
+      qc.invalidateQueries({ queryKey: customerKeys.addresses });
+      qc.invalidateQueries({ queryKey: customerKeys.address() });
+      if (created?.id) {
+        router.push(`/checkout?addressId=${created.id}`);
+      } else {
+        router.push('/checkout');
+      }
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Failed to save address'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[var(--page-bg)] flex flex-col font-sans antialiased text-neutral-900">
+      <header className="sticky top-0 z-50 bg-white border-b border-neutral-100 px-4 py-3 flex items-center gap-3">
+        <Link href="/checkout" className="p-1 rounded-lg hover:bg-neutral-100">
+          <ArrowLeft className="w-5 h-5" />
+        </Link>
+        <h1 className="text-lg font-bold font-serif text-[var(--brand-primary)]">Add Address</h1>
+      </header>
+
+      <main className="max-w-md mx-auto w-full px-4 py-6 flex-1">
+        <form onSubmit={onSubmit} className="bg-white border border-neutral-200 rounded-3xl p-6 space-y-3">
+          {error && <p className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-xl px-3 py-2">{error}</p>}
+          {(Object.keys(empty) as Array<keyof typeof empty>)
+            .filter((k) => k !== 'isDefaultShipping' && k !== 'country' && k !== 'postalCode')
+            .map((key) => {
+              // PIN Code goes first (typed before City/State so the lookup
+              // below can auto-fill them) -- insert it right before Address
+              // Line 2's next sibling, i.e. right after addressLine2.
+              if (key === 'city') {
+                return (
+                  <React.Fragment key="postal-and-city">
+                    <label className="block space-y-1">
+                      <span className="text-xs font-semibold">Postal Code <span className="text-red-500">*</span></span>
+                      <div className="relative">
+                        <input
+                          required
+                          value={form.postalCode}
+                          onChange={(e) => handlePostalCodeChange(e.target.value)}
+                          placeholder="6-digit PIN — City & State fill in automatically"
+                          inputMode="numeric"
+                          maxLength={6}
+                          className="w-full border border-neutral-200 rounded-xl px-3 py-2.5 pr-9 text-sm outline-none"
+                        />
+                        {pincodeLoading && (
+                          <Loader2 className="w-4 h-4 text-neutral-400 animate-spin absolute right-3 top-1/2 -translate-y-1/2" />
+                        )}
+                        {!pincodeLoading && pincodeFilled && (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 absolute right-3 top-1/2 -translate-y-1/2" />
+                        )}
+                      </div>
+                      {pincodeNotFound && form.postalCode.length === 6 && (
+                        <p className="text-[11px] text-amber-600 font-medium">Couldn&apos;t auto-detect this PIN — enter City &amp; State below.</p>
+                      )}
+                    </label>
+                    <label className="block space-y-1">
+                      <span className="text-xs font-semibold">City <span className="text-red-500">*</span></span>
+                      <input
+                        required
+                        value={form.city}
+                        onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))}
+                        className="w-full border border-neutral-200 rounded-xl px-3 py-2.5 text-sm outline-none"
+                      />
+                    </label>
+                  </React.Fragment>
+                );
+              }
+              return (
+                <label key={key} className="block space-y-1">
+                  <span className="text-xs font-semibold capitalize">
+                    {String(key).replace(/([A-Z])/g, ' $1')}
+                    {key !== 'addressLine2' && <span className="text-red-500 ml-0.5">*</span>}
+                    {key === 'addressLine2' && <span className="text-neutral-400 font-normal text-[10px] ml-1">(Optional)</span>}
+                  </span>
+                  <input
+                    required={key !== 'addressLine2'}
+                    value={String(form[key] || '')}
+                    onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
+                    className="w-full border border-neutral-200 rounded-xl px-3 py-2.5 text-sm outline-none"
+                  />
+                </label>
+              );
+            })}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-[var(--brand-primary)] text-white text-sm font-bold py-3 rounded-xl disabled:opacity-60"
+          >
+            {loading ? 'Saving…' : 'Save Address'}
+          </button>
+        </form>
+      </main>
+      <StorefrontFooter />
+    </div>
+  );
+}

@@ -1,0 +1,128 @@
+/**
+ * Normalize media URLs for display.
+ * Old local-storage records used relative `/storage/...` paths which resolve
+ * against the Next.js origin (404). Map those to the backend storage proxy.
+ */
+function getBackendOrigin(): string {
+  const envUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (envUrl) {
+    return envUrl.replace(/\/api\/v1\/?$/, '');
+  }
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+      return 'https://api.vasanthissignature.in';
+    }
+    return 'http://localhost:4000';
+  }
+  return 'https://api.vasanthissignature.in';
+}
+
+export function resolveMediaUrl(url?: string | null): string {
+  if (!url) return '';
+
+  // 1. Data URIs and blob URLs pass through untouched
+  if (url.startsWith('data:') || url.startsWith('blob:')) {
+    return url;
+  }
+
+  const backendOrigin = getBackendOrigin();
+
+  // Rewrite legacy railway domain to live api.vasanthissignature.in
+  if (url.includes('vsss-production.up.railway.app')) {
+    url = url.replace('https://vsss-production.up.railway.app', backendOrigin);
+  }
+
+  // 2. Convert any dev/local backend origin (localhost:4000, 127.0.0.1:4000, 192.168.x.x:4000) to current environment's backend origin
+  if (/^https?:\/\/[^\/]+:4000/i.test(url)) {
+    return url.replace(/^https?:\/\/[^\/]+:4000/i, backendOrigin);
+  }
+
+  // 3. Absolute HTTP/HTTPS URLs (e.g. S3, Unsplash, external CDNs, Railway absolute URLs)
+  if (/^https?:\/\//i.test(url)) {
+    const s3Host = 'vasanthi-designers-dev-bucket.s3.ap-south-2.amazonaws.com';
+    const proxyBase = (process.env.NEXT_PUBLIC_S3_PUBLIC_URL || '').replace(/\/$/, '');
+    if (proxyBase && url.includes(s3Host)) {
+      try {
+        const u = new URL(url);
+        return `${proxyBase}${u.pathname}`;
+      } catch {
+        return url;
+      }
+    }
+    return url;
+  }
+
+  // 4. Local frontend static assets (in Next.js public/ folder)
+  if (
+    url.startsWith('/images/') ||
+    url.startsWith('/assets/') ||
+    url.startsWith('/icons/') ||
+    url.startsWith('/brand/') ||
+    url.startsWith('/brand-') ||
+    url.startsWith('/favicon') ||
+    url.startsWith('/placeholder') ||
+    url.startsWith('/next.svg') ||
+    url.startsWith('/vercel.svg')
+  ) {
+    return url;
+  }
+
+  // 5. Relative paths (/storage/... or /api/v1/storage/...) -> map to backendOrigin
+  if (url.startsWith('/storage/')) {
+    return `${backendOrigin}/api/v1${url}`;
+  }
+  if (url.startsWith('/api/v1/')) {
+    return `${backendOrigin}${url}`;
+  }
+  if (url.startsWith('/')) {
+    return `${backendOrigin}/api/v1/storage${url}`;
+  }
+
+  return `${backendOrigin}/api/v1/storage/${url}`;
+}
+
+export function isLocalOrPlaceholder(url?: string | null): boolean {
+  if (!url) return true;
+  return (
+    url.startsWith('data:') ||
+    url.startsWith('blob:') ||
+    url.endsWith('.svg') ||
+    url.includes('placehold.co') ||
+    url.includes('unsplash.com') ||
+    url.includes('images.unsplash.com')
+  );
+}
+
+export const VARIANT_SIZES = { thumb: 150, medium: 600, large: 1200 } as const;
+export type ImageVariant = keyof typeof VARIANT_SIZES;
+
+/**
+ * Append a variant query to a storage proxy URL so the backend serves
+ * the pre-generated, optimized WebP variant instead of the full-size master image.
+ */
+export function withVariant(url: string, variant?: ImageVariant): string {
+  if (
+    !url ||
+    url.includes('placehold.co') ||
+    url.includes('data:') ||
+    url.includes('unsplash.com') ||
+    url.endsWith('.mp4') ||
+    url.endsWith('.webm') ||
+    url.endsWith('.mov') ||
+    url.includes('/videos/')
+  ) {
+    return resolveMediaUrl(url);
+  }
+  const resolved = resolveMediaUrl(url);
+  if (!variant) return resolved;
+
+  try {
+    const u = new URL(resolved);
+    u.searchParams.set('variant', variant);
+    return u.toString();
+  } catch {
+    const separator = resolved.includes('?') ? '&' : '?';
+    return `${resolved}${separator}variant=${variant}`;
+  }
+}

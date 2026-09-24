@@ -1,0 +1,1440 @@
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '@database/prisma.service';
+import { CheckoutSessionStatus, Prisma } from '@prisma/client';
+import {
+  CreateCheckoutSessionDto,
+  DEFAULT_TERMINAL_ID,
+  PosCartItemDto,
+  PosCustomerInfoDto,
+  PosPaymentMethodType,
+} from './pos.types';
+
+@Injectable()
+export class PosRepository {
+  constructor(readonly prisma: PrismaService) {}
+
+  async findVariantByBarcode(code: string) {
+    const trimmed = code.trim();
+    // ONLINE-only products aren't stocked at the counter -- POS scan/search
+    // should never resolve to one, even by exact barcode/SKU match.
+    const sellableInStore: Prisma.ProductWhereInput = {
+      channel: { in: ['STORE', 'BOTH'] },
+    };
+
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        trimmed,
+      );
+    const variantMatchConditions: Prisma.ProductVariantWhereInput[] = [
+      { barcode: { equals: trimmed, mode: 'insensitive' } },
+      { sku: { equals: trimmed, mode: 'insensitive' } },
+    ];
+    if (isUuid) {
+      variantMatchConditions.push({ id: trimmed });
+    }
+
+    // Support scanned sample stickers & known barcode aliases
+    const barcodeAliases: Record<string, string> = {
+      '890351069409': 'COL1-XL',
+    };
+    if (barcodeAliases[trimmed]) {
+      variantMatchConditions.push({
+        sku: { equals: barcodeAliases[trimmed], mode: 'insensitive' },
+      });
+    }
+
+    // 1. Search directly on ProductVariant (barcode, sku, id)
+    const variant = await this.prisma.productVariant.findFirst({
+      where: {
+        OR: variantMatchConditions,
+        deletedAt: null,
+        product: sellableInStore,
+      },
+      include: {
+        product: {
+          include: {
+            media: {
+              where: { isPrimary: true, deletedAt: null },
+              take: 1,
+            },
+          },
+        },
+        inventory: true,
+        attributeValues: {
+          include: {
+            attribute: true,
+            option: true,
+          },
+        },
+        media: {
+          where: { isPrimary: true, deletedAt: null },
+          take: 1,
+        },
+      },
+    });
+
+    if (variant) {
+      return variant;
+    }
+
+    // 1b. Fallback: Search directly on ProductVariant (exact barcode, sku, id) without channel filter
+    const fallbackVariant = await this.prisma.productVariant.findFirst({
+      where: {
+        OR: variantMatchConditions,
+        deletedAt: null,
+      },
+      include: {
+        product: {
+          include: {
+            media: {
+              where: { isPrimary: true, deletedAt: null },
+              take: 1,
+            },
+          },
+        },
+        inventory: true,
+        attributeValues: {
+          include: {
+            attribute: true,
+            option: true,
+          },
+        },
+        media: {
+          where: { isPrimary: true, deletedAt: null },
+          take: 1,
+        },
+      },
+    });
+
+    if (fallbackVariant) {
+      return fallbackVariant;
+    }
+
+    // 2. Fallback search by Product SKU, slug, or name (case-insensitive)
+    const product = await this.prisma.product.findFirst({
+      where: {
+        OR: [
+          { sku: { equals: trimmed, mode: 'insensitive' } },
+          { slug: { equals: trimmed, mode: 'insensitive' } },
+          { name: { contains: trimmed, mode: 'insensitive' } },
+        ],
+        deletedAt: null,
+        ...sellableInStore,
+      },
+      include: {
+        variants: {
+          where: { deletedAt: null },
+          include: {
+            inventory: true,
+            media: { where: { isPrimary: true, deletedAt: null }, take: 1 },
+            attributeValues: {
+              include: { attribute: true, option: true },
+            },
+          },
+          take: 1,
+        },
+        media: { where: { isPrimary: true, deletedAt: null }, take: 1 },
+      },
+    });
+    if (product) {
+      if (product.variants.length > 0) {
+        const firstVariant = product.variants[0];
+        return {
+          ...firstVariant,
+          product,
+          media:
+            product.media.length > 0 ? product.media : firstVariant.media || [],
+        };
+      }
+      // Return synthetic variant if product has no explicit variants yet
+      return {
+        id: product.id,
+        productId: product.id,
+        title: product.name,
+        sku: product.sku || `SKU-${product.id.slice(0, 6)}`,
+        barcode: trimmed,
+        priceOverride: product.basePrice,
+        costPrice: product.costPrice,
+        salePriceOverride: product.salePrice,
+        product,
+        media: product.media,
+        inventory: null,
+        attributeValues: [],
+      };
+    }
+
+    // 3. Fallback: Search archived / deleted variants so physical barcode labels can still be scanned and identified on POS/mobile
+    const archivedVariant = await this.prisma.productVariant.findFirst({
+      where: {
+        OR: variantMatchConditions,
+      },
+      include: {
+        product: {
+          include: {
+            media: {
+              take: 1,
+            },
+          },
+        },
+        inventory: true,
+        attributeValues: {
+          include: {
+            attribute: true,
+            option: true,
+          },
+        },
+        media: {
+          take: 1,
+        },
+      },
+    });
+
+    if (archivedVariant) {
+      return {
+        ...archivedVariant,
+        isArchived: true,
+      };
+    }
+
+    return null;
+  }
+
+  async createCheckoutSession(
+    sessionId: string,
+    handoffToken: string,
+    cashierId: string,
+    dto: CreateCheckoutSessionDto,
+    subtotal: number,
+    taxTotal: number,
+    grandTotal: number,
+    expiresAt: Date,
+    status: CheckoutSessionStatus = CheckoutSessionStatus.WAITING_FOR_WEB,
+  ) {
+    return this.prisma.checkoutSession.create({
+      data: {
+        sessionId,
+        handoffToken,
+        shopId: dto.shopId || 'MAIN_STORE',
+        deviceId: dto.deviceId,
+        cashierId,
+        cart: dto.items as unknown as Prisma.InputJsonValue,
+        customer: dto.customer
+          ? (dto.customer as unknown as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
+        subtotal,
+        discountTotal: dto.discountTotal || 0,
+        taxTotal,
+        grandTotal,
+        status,
+        expiresAt,
+      },
+    });
+  }
+
+  /**
+   * Carts parked at the till and still waiting to be picked back up.
+   *
+   * Held carts are DRAFT; a phone handoff is WAITING_FOR_WEB, so the two never
+   * show up in each other's lists.
+   */
+  async findHeldSessions(deviceId?: string) {
+    return this.prisma.checkoutSession.findMany({
+      where: {
+        status: CheckoutSessionStatus.DRAFT,
+        expiresAt: { gt: new Date() },
+        ...(deviceId ? { deviceId } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+  }
+
+  async findCheckoutSessionByToken(handoffToken: string) {
+    const raw = handoffToken.trim();
+    const withoutHash = raw.replace(/^#/, '');
+    const cleanDigits = raw.replace(/[^0-9]/g, '');
+    const hyphenated =
+      cleanDigits.length === 6
+        ? `${cleanDigits.slice(0, 3)}-${cleanDigits.slice(3)}`
+        : raw;
+
+    const candidates = Array.from(
+      new Set([
+        raw,
+        withoutHash,
+        cleanDigits,
+        hyphenated,
+        `#${raw}`,
+        `#${withoutHash}`,
+        `SHOP-2026-${cleanDigits}`,
+        `#SHOP-2026-${cleanDigits}`,
+      ]),
+    ).filter((c) => c && c.length > 0);
+
+    return this.prisma.checkoutSession.findFirst({
+      where: {
+        OR: [
+          { handoffToken: { in: candidates } },
+          { sessionId: { in: candidates } },
+        ],
+      },
+    });
+  }
+
+  async findCheckoutSessionById(sessionId: string) {
+    return this.prisma.checkoutSession.findUnique({
+      where: { sessionId },
+    });
+  }
+
+  async updateCheckoutSessionStatus(
+    sessionId: string,
+    status: CheckoutSessionStatus,
+    orderId?: string,
+  ) {
+    return this.prisma.checkoutSession.update({
+      where: { sessionId },
+      data: {
+        status,
+        ...(orderId ? { orderId } : {}),
+      },
+    });
+  }
+
+  /**
+   * First N sellable variants in a category, for the till's quick-buy grid.
+   *
+   * Same include shape and STORE/BOTH channel filter as the name search, so
+   * the same toScanResult mapping produces a scan-compatible row.
+   */
+  async findVariantsByCategory(categoryId: string, limit = 24) {
+    if (!categoryId?.trim()) return [];
+    return this.prisma.productVariant.findMany({
+      where: {
+        deletedAt: null,
+        product: {
+          channel: { in: ['STORE', 'BOTH'] },
+          deletedAt: null,
+          categories: { some: { categoryId } },
+        },
+      },
+      include: {
+        product: {
+          include: {
+            media: { where: { isPrimary: true, deletedAt: null }, take: 1 },
+          },
+        },
+        inventory: true,
+        attributeValues: { include: { attribute: true, option: true } },
+        media: { where: { isPrimary: true, deletedAt: null }, take: 1 },
+      },
+      take: Math.min(48, Math.max(1, limit)),
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Variants matching a typed name, for the till's product search.
+   *
+   * Returns the same shape as findVariantByBarcode so the caller can map it
+   * through the one scan-result builder -- a second mapping would be a second
+   * place for stock, price or the GST rate to be got wrong.
+   *
+   * Restricted to store-sellable products for the same reason the scan is:
+   * an online-only line has no business on the counter screen.
+   */
+  async searchVariantsByName(query: string, limit = 10) {
+    const trimmed = query.trim();
+    if (trimmed.length < 2) return [];
+
+    return this.prisma.productVariant.findMany({
+      where: {
+        deletedAt: null,
+        product: {
+          channel: { in: ['STORE', 'BOTH'] },
+          deletedAt: null,
+          OR: [
+            { name: { contains: trimmed, mode: 'insensitive' } },
+            { sku: { contains: trimmed, mode: 'insensitive' } },
+          ],
+        },
+      },
+      include: {
+        product: {
+          include: {
+            media: { where: { isPrimary: true, deletedAt: null }, take: 1 },
+          },
+        },
+        inventory: true,
+        attributeValues: { include: { attribute: true, option: true } },
+        media: { where: { isPrimary: true, deletedAt: null }, take: 1 },
+      },
+      take: Math.min(25, Math.max(1, limit)),
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * GST rate per product, for pricing a till sale.
+   *
+   * Read at bill time rather than taken from the client: the phones in the
+   * shop still send a flat 5%, and a rate that decides tax must not be
+   * something the caller can choose.
+   */
+  async findProductTaxRates(
+    productIds: string[],
+  ): Promise<Map<string, number>> {
+    const unique = Array.from(new Set(productIds.filter(Boolean)));
+    if (!unique.length) return new Map();
+
+    const rows = await this.prisma.product.findMany({
+      where: { id: { in: unique } },
+      select: { id: true, taxPercentage: true },
+    });
+
+    return new Map(rows.map((r) => [r.id, Number(r.taxPercentage ?? 0)]));
+  }
+
+  async findOrCreateWalkInCustomer() {
+    let user = await this.prisma.user.findFirst({
+      where: { email: 'walkin@vasanthidesigners.com' },
+      include: { customerProfile: true },
+    });
+
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: {
+          email: 'walkin@vasanthidesigners.com',
+          firstName: 'Walk-in',
+          lastName: 'Customer',
+          passwordHash: 'WALKIN_PASS_HASH',
+          userType: 'CUSTOMER',
+          accountStatus: 'ACTIVE',
+          customerProfile: {
+            create: {
+              phone: '9999999999',
+            },
+          },
+        },
+        include: { customerProfile: true },
+      });
+    }
+
+    if (!user.customerProfile) {
+      const profile = await this.prisma.customerProfile.create({
+        data: {
+          userId: user.id,
+          phone: '9999999999',
+        },
+      });
+      return profile;
+    }
+
+    return user.customerProfile;
+  }
+  async findCustomerByPhone(phoneInput: string) {
+    const cleanPhone = phoneInput.replace(/\D/g, '').slice(-10);
+    if (cleanPhone.length < 10) return null;
+
+    const profile = await this.prisma.customerProfile.findFirst({
+      where: {
+        OR: [{ phone: cleanPhone }, { phone: { contains: cleanPhone } }],
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+            phone: true,
+          },
+        },
+      },
+    });
+
+    let userId = profile?.userId;
+    const customerProfileId = profile?.id;
+    let fullName = '';
+    let email = '';
+
+    if (profile) {
+      fullName =
+        [profile.user.firstName, profile.user.lastName]
+          .filter(Boolean)
+          .join(' ') || profile.user.email;
+      email = profile.user.email;
+    } else {
+      const user = await this.prisma.user.findFirst({
+        where: {
+          OR: [{ phone: cleanPhone }, { phone: { contains: cleanPhone } }],
+        },
+      });
+
+      if (!user) return null;
+      userId = user.id;
+      fullName =
+        [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email;
+      email = user.email;
+    }
+
+    const whereOr: any[] = [];
+    if (customerProfileId) whereOr.push({ customerId: customerProfileId });
+    if (userId) whereOr.push({ createdBy: userId });
+
+    const orders =
+      whereOr.length > 0
+        ? await this.prisma.order.findMany({
+            where: { OR: whereOr },
+            orderBy: { createdAt: 'desc' },
+            take: 10,
+            include: {
+              items: true,
+            },
+          })
+        : [];
+
+    const ordersCount = orders.length;
+    const totalSpent = orders.reduce((sum, o) => sum + Number(o.grandTotal), 0);
+
+    const recentOrders = orders.map((o) => ({
+      orderId: o.id,
+      orderNumber: o.orderNumber,
+      grandTotal: Number(o.grandTotal),
+      status: o.status,
+      paymentMethod: o.paymentMethod,
+      createdAt: o.createdAt,
+      itemsCount: o.items.length,
+      items: o.items.map((i) => ({
+        productName: i.productName,
+        quantity: i.quantity,
+        unitPrice: Number(i.unitPrice),
+      })),
+    }));
+
+    return {
+      found: true,
+      userId,
+      customerProfileId,
+      fullName: fullName || 'Valued Customer',
+      phone: cleanPhone,
+      email,
+      ordersCount,
+      totalSpent,
+      recentOrders,
+    };
+  }
+
+  async upsertPosCustomer(dto: {
+    fullName: string;
+    phone: string;
+    email?: string;
+  }) {
+    const cleanPhone = dto.phone.replace(/\D/g, '').slice(-10);
+    if (cleanPhone.length < 10) {
+      throw new Error('Valid 10-digit phone number is required.');
+    }
+    const nameParts = dto.fullName.trim().split(' ');
+    const firstName = nameParts[0] || 'Valued';
+    const lastName = nameParts.slice(1).join(' ') || 'Customer';
+    const email = dto.email?.trim() || `pos_${cleanPhone}@vasanthi.local`;
+
+    let user = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { phone: cleanPhone },
+          { email },
+          { phone: { contains: cleanPhone } },
+        ],
+      },
+      include: { customerProfile: true },
+    });
+
+    if (user) {
+      user = await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          firstName: firstName || user.firstName,
+          lastName: lastName || user.lastName,
+          phone: cleanPhone,
+          ...(dto.email?.trim() ? { email: dto.email.trim() } : {}),
+        },
+        include: { customerProfile: true },
+      });
+      if (!user.customerProfile) {
+        await this.prisma.customerProfile.create({
+          data: { userId: user.id, phone: cleanPhone },
+        });
+      }
+    } else {
+      user = await this.prisma.user.create({
+        data: {
+          email,
+          firstName,
+          lastName,
+          phone: cleanPhone,
+          passwordHash: 'POS_CUSTOMER_NO_PASSWORD',
+          userType: 'CUSTOMER',
+          accountStatus: 'ACTIVE',
+          customerProfile: {
+            create: {
+              phone: cleanPhone,
+            },
+          },
+        },
+        include: { customerProfile: true },
+      });
+    }
+
+    return this.findCustomerByPhone(cleanPhone);
+  }
+
+  async listPosCustomers(params: {
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, params.page || 1);
+    const limit = Math.max(1, Math.min(100, params.limit || 20));
+    const skip = (page - 1) * limit;
+    const search = params.search?.trim();
+
+    const where: any = {
+      deletedAt: null,
+      userType: 'CUSTOMER',
+    };
+
+    if (search) {
+      where.OR = [
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const [users, total] = await Promise.all([
+      this.prisma.user.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          customerProfile: {
+            include: {
+              orders: {
+                where: { channel: 'POS_SHOPORA' },
+                orderBy: { createdAt: 'desc' },
+                take: 5,
+                include: { items: true },
+              },
+            },
+          },
+        },
+      }),
+      this.prisma.user.count({ where }),
+    ]);
+
+    const data = users.map((u) => {
+      const orders = u.customerProfile?.orders || [];
+      const totalSpent = orders.reduce(
+        (sum, o) => sum + Number(o.grandTotal),
+        0,
+      );
+      return {
+        id: u.id,
+        customerProfileId: u.customerProfile?.id,
+        fullName:
+          [u.firstName, u.lastName].filter(Boolean).join(' ') || u.email,
+        phone: u.phone || u.customerProfile?.phone || 'N/A',
+        email: u.email,
+        ordersCount: orders.length,
+        totalSpent,
+        registeredAt: u.createdAt,
+        recentOrders: orders.map((o) => ({
+          orderId: o.id,
+          orderNumber: o.orderNumber,
+          grandTotal: Number(o.grandTotal),
+          status: o.status,
+          paymentMethod: o.paymentMethod,
+          createdAt: o.createdAt,
+          itemsCount: o.items.length,
+          items: o.items.map((i) => ({
+            productName: i.productName,
+            quantity: i.quantity,
+            unitPrice: Number(i.unitPrice),
+          })),
+        })),
+      };
+    });
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  /** Run the createPosOrder logic against a caller-owned transaction. */
+  async createPosOrderTx(
+    tx: Prisma.TransactionClient,
+    params: {
+      orderNumber: string;
+      customerId: string;
+      cashierId: string;
+      subtotal: number;
+      discountTotal: number;
+      taxTotal: number;
+      grandTotal: number;
+      paymentMethod: PosPaymentMethodType;
+      payments?: { method: string; amount: number }[];
+      terminalId?: string;
+      notes?: string;
+      items: PosCartItemDto[];
+      customerInfo?: PosCustomerInfoDto;
+    },
+  ) {
+    const variantIds = params.items
+      .map((i) => i.variantId)
+      .filter((id): id is string => Boolean(id));
+    const existingVariants = await tx.productVariant.findMany({
+      where: { id: { in: variantIds } },
+      select: { id: true },
+    });
+    const validVariantSet = new Set(existingVariants.map((v) => v.id));
+
+    return tx.order.create({
+      data: {
+        orderNumber: params.orderNumber,
+        customerId: params.customerId,
+        status: 'CONFIRMED',
+        channel: 'POS_SHOPORA',
+        paymentMethod: params.paymentMethod,
+        terminalId: params.terminalId || DEFAULT_TERMINAL_ID,
+        subtotal: params.subtotal,
+        discountTotal: params.discountTotal,
+        taxTotal: params.taxTotal,
+        shippingCharge: 0,
+        grandTotal: params.grandTotal,
+        notes: params.notes,
+        createdBy: params.cashierId,
+        addresses: {
+          create: [
+            {
+              addressType: 'SHIPPING',
+              fullName: params.customerInfo?.fullName || 'Walk-in Customer',
+              phone: params.customerInfo?.phone || '9999999999',
+              addressLine1: 'Vasanthi Designers Store - Over The Counter',
+              city: 'Hyderabad',
+              state: 'Telangana',
+              country: 'IN',
+              postalCode: '500034',
+            },
+          ],
+        },
+        items: {
+          create: params.items.map((i) => ({
+            product: { connect: { id: i.productId } },
+            ...(i.variantId && validVariantSet.has(i.variantId)
+              ? { variant: { connect: { id: i.variantId } } }
+              : {}),
+            productName: i.productName,
+            variantTitle: i.variantTitle,
+            sku: i.sku || 'POS-SKU',
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            totalPrice: i.unitPrice * i.quantity,
+            discountAmount: i.discountAmount || 0,
+            taxAmount: i.taxAmount || 0,
+          })),
+        },
+        payments: {
+          create: (params.payments?.length
+            ? params.payments
+            : [{ method: params.paymentMethod, amount: params.grandTotal }]
+          ).map((p, index, all) => ({
+            paymentNumber:
+              all.length > 1
+                ? `PAY-${params.orderNumber}-${index + 1}`
+                : `PAY-${params.orderNumber}`,
+            method: p.method,
+            provider: 'POS_TERMINAL',
+            status: 'COMPLETED',
+            amount: p.amount,
+            createdBy: params.cashierId,
+          })),
+        },
+        timeline: {
+          create: [
+            {
+              status: 'CONFIRMED',
+              message: `POS Sale completed via ${params.paymentMethod}`,
+              createdBy: params.cashierId,
+            },
+          ],
+        },
+      },
+      include: { items: true, payments: true, addresses: true },
+    });
+  }
+
+  async createPosOrder(params: {
+    orderNumber: string;
+    customerId: string;
+    cashierId: string;
+    subtotal: number;
+    discountTotal: number;
+    taxTotal: number;
+    grandTotal: number;
+    paymentMethod: PosPaymentMethodType;
+    /**
+     * One row per tender. A split bill records each part separately so the
+     * cash drawer and the card settlement each reconcile on their own.
+     */
+    payments?: { method: string; amount: number }[];
+    terminalId?: string;
+    notes?: string;
+    items: PosCartItemDto[];
+    customerInfo?: PosCustomerInfoDto;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      const variantIds = params.items
+        .map((i) => i.variantId)
+        .filter((id): id is string => Boolean(id));
+      const existingVariants = await tx.productVariant.findMany({
+        where: { id: { in: variantIds } },
+        select: { id: true },
+      });
+      const validVariantSet = new Set(existingVariants.map((v) => v.id));
+
+      const createdOrder = await tx.order.create({
+        data: {
+          orderNumber: params.orderNumber,
+          customerId: params.customerId,
+          status: 'CONFIRMED',
+          channel: 'POS_SHOPORA',
+          paymentMethod: params.paymentMethod,
+          terminalId: params.terminalId || DEFAULT_TERMINAL_ID,
+          subtotal: params.subtotal,
+          discountTotal: params.discountTotal,
+          taxTotal: params.taxTotal,
+          shippingCharge: 0,
+          grandTotal: params.grandTotal,
+          notes: params.notes,
+          createdBy: params.cashierId,
+          addresses: {
+            create: [
+              {
+                addressType: 'SHIPPING',
+                fullName: params.customerInfo?.fullName || 'Walk-in Customer',
+                phone: params.customerInfo?.phone || '9999999999',
+                addressLine1: 'Vasanthi Designers Store - Over The Counter',
+                city: 'Hyderabad',
+                state: 'Telangana',
+                country: 'IN',
+                postalCode: '500034',
+              },
+            ],
+          },
+          items: {
+            create: params.items.map((i) => ({
+              product: { connect: { id: i.productId } },
+              ...(i.variantId && validVariantSet.has(i.variantId)
+                ? { variant: { connect: { id: i.variantId } } }
+                : {}),
+              productName: i.productName,
+              variantTitle: i.variantTitle,
+              sku: i.sku || 'POS-SKU',
+              quantity: i.quantity,
+              unitPrice: i.unitPrice,
+              totalPrice: i.unitPrice * i.quantity,
+              discountAmount: i.discountAmount || 0,
+              taxAmount: i.taxAmount || 0,
+            })),
+          },
+          payments: {
+            create: (params.payments?.length
+              ? params.payments
+              : [{ method: params.paymentMethod, amount: params.grandTotal }]
+            ).map((p, index, all) => ({
+              paymentNumber:
+                all.length > 1
+                  ? `PAY-${params.orderNumber}-${index + 1}`
+                  : `PAY-${params.orderNumber}`,
+              method: p.method,
+              provider: 'POS_TERMINAL',
+              status: 'COMPLETED',
+              amount: p.amount,
+              createdBy: params.cashierId,
+            })),
+          },
+          timeline: {
+            create: [
+              {
+                status: 'CONFIRMED',
+                message: `POS Sale completed via ${params.paymentMethod}`,
+                createdBy: params.cashierId,
+              },
+            ],
+          },
+        },
+        include: {
+          items: true,
+          payments: true,
+          addresses: true,
+        },
+      });
+
+      return createdOrder;
+    });
+  }
+
+  /**
+   * Everything a receipt reprint needs: line items with their variants (for
+   * HSN lookup later), the shipping address (for the customer name/phone), and
+   * the recorded payments (so a split bill reprints with both tenders).
+   */
+  async findOrderForReprint(orderNumber: string) {
+    return this.prisma.order.findUnique({
+      where: { orderNumber },
+      include: {
+        items: true,
+        addresses: true,
+        payments: { orderBy: { createdAt: 'asc' } },
+      },
+    });
+  }
+
+  async findOrderByOrderNumber(orderNumber: string) {
+    return this.prisma.order.findUnique({
+      where: { orderNumber },
+      include: { items: true },
+    });
+  }
+
+  /**
+   * A past sale with everything needed to take items back over the counter:
+   * the line items, the payment the refund attaches to, and how much of each
+   * line has already gone back.
+   *
+   * Rejected returns are excluded from the returned tally -- goods that were
+   * refused are still the customer's, so those quantities remain returnable.
+   */
+  async findSaleForReturn(orderNumber: string) {
+    const order = await this.prisma.order.findUnique({
+      where: { orderNumber },
+      include: {
+        items: true,
+        payments: { orderBy: { createdAt: 'desc' } },
+        customer: { select: { id: true, phone: true } },
+      },
+    });
+    if (!order) return null;
+
+    const alreadyReturned = await this.prisma.returnItem.groupBy({
+      by: ['orderItemId'],
+      _sum: { quantity: true },
+      where: {
+        orderItem: { orderId: order.id },
+        returnRequest: { status: { notIn: ['REJECTED', 'CANCELLED'] } },
+      },
+    });
+
+    const returnedByItem = new Map(
+      alreadyReturned.map((r) => [r.orderItemId, r._sum.quantity ?? 0]),
+    );
+
+    return { order, returnedByItem };
+  }
+
+  /**
+   * Records a completed over-the-counter return: the return itself, the
+   * refund, and the restock, in one transaction. Either the shop has the
+   * goods back and the customer has their money, or neither happened.
+   */
+  async createPosReturn(params: {
+    orderId: string;
+    orderNumber: string;
+    paymentId: string;
+    returnNumber: string;
+    refundNumber: string;
+    reason: string;
+    notes?: string;
+    refundMethod: string;
+    refundAmount: number;
+    cashierId: string;
+    items: {
+      orderItemId: string;
+      variantId: string | null;
+      quantity: number;
+    }[];
+    restock: (tx: Prisma.TransactionClient) => Promise<void>;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      const returnRequest = await tx.returnRequest.create({
+        data: {
+          orderId: params.orderId,
+          returnNumber: params.returnNumber,
+          reason: params.reason,
+          // Not a request awaiting approval: the customer is at the counter,
+          // the goods are back, and the money has been handed over.
+          status: 'COMPLETED',
+          adminNotes: params.notes,
+          createdBy: params.cashierId,
+          refundPreference: params.refundMethod,
+          items: {
+            create: params.items.map((i) => ({
+              orderItemId: i.orderItemId,
+              quantity: i.quantity,
+              reason: params.reason,
+            })),
+          },
+        },
+        include: { items: true },
+      });
+
+      const refund = await tx.refund.create({
+        data: {
+          paymentId: params.paymentId,
+          orderId: params.orderId,
+          refundNumber: params.refundNumber,
+          amount: params.refundAmount,
+          reason: params.reason,
+          status: 'COMPLETED',
+          // Read back by getCashMovementForWindow to work out what should be
+          // left in the drawer, so a cash refund has to say so here.
+          method: params.refundMethod,
+          createdBy: params.cashierId,
+        },
+      });
+
+      await params.restock(tx);
+
+      return { returnRequest, refund };
+    });
+  }
+
+  /**
+   * The whole exchange atomically: book the return + refund, restock the
+   * returned items, create the new sale, deduct its inventory.
+   *
+   * All-or-nothing. If any step fails, the customer neither has money back
+   * nor a new item -- the alternative would let them walk out with cash
+   * refunded on a sale that was never re-booked.
+   */
+  async createPosExchange(params: {
+    orderId: string;
+    orderNumber: string;
+    paymentId: string;
+    returnNumber: string;
+    refundNumber: string;
+    reason: string;
+    notes?: string;
+    refundMethod: string;
+    refundAmount: number;
+    cashierId: string;
+    returnItems: {
+      orderItemId: string;
+      variantId: string | null;
+      quantity: number;
+    }[];
+    /** Callback: caller restocks the returned items using the given tx. */
+    restock: (tx: Prisma.TransactionClient) => Promise<void>;
+    newOrder: {
+      orderNumber: string;
+      customerId: string;
+      subtotal: number;
+      discountTotal: number;
+      taxTotal: number;
+      grandTotal: number;
+      paymentMethod: PosPaymentMethodType;
+      terminalId?: string;
+      notes?: string;
+      items: PosCartItemDto[];
+      customerInfo?: PosCustomerInfoDto;
+    };
+    /** Callback: caller deducts inventory for the new sale using the given tx. */
+    deduct: (tx: Prisma.TransactionClient, newOrderId: string) => Promise<void>;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      const returnRequest = await tx.returnRequest.create({
+        data: {
+          orderId: params.orderId,
+          returnNumber: params.returnNumber,
+          reason: params.reason,
+          status: 'COMPLETED',
+          adminNotes: params.notes,
+          createdBy: params.cashierId,
+          refundPreference: params.refundMethod,
+          items: {
+            create: params.returnItems.map((i) => ({
+              orderItemId: i.orderItemId,
+              quantity: i.quantity,
+              reason: params.reason,
+            })),
+          },
+        },
+        include: { items: true },
+      });
+
+      const refund = await tx.refund.create({
+        data: {
+          paymentId: params.paymentId,
+          orderId: params.orderId,
+          refundNumber: params.refundNumber,
+          amount: params.refundAmount,
+          reason: params.reason,
+          status: 'COMPLETED',
+          method: params.refundMethod,
+          createdBy: params.cashierId,
+        },
+      });
+
+      await params.restock(tx);
+
+      const newOrder = await this.createPosOrderTx(tx, {
+        ...params.newOrder,
+        cashierId: params.cashierId,
+      });
+
+      await params.deduct(tx, newOrder.id);
+
+      return { returnRequest, refund, newOrder };
+    });
+  }
+
+  async findInventoryQuantities(
+    variantIds: string[],
+  ): Promise<
+    Map<string, { availableQuantity: number; allowBackorder: boolean }>
+  > {
+    if (variantIds.length === 0) return new Map();
+    const rows = await this.prisma.inventory.findMany({
+      where: { variantId: { in: variantIds } },
+      select: {
+        variantId: true,
+        availableQuantity: true,
+        allowBackorder: true,
+      },
+    });
+    return new Map(
+      rows.map((r) => [
+        r.variantId,
+        {
+          availableQuantity: r.availableQuantity,
+          allowBackorder: r.allowBackorder,
+        },
+      ]),
+    );
+  }
+
+  /**
+   * The open shift on a terminal, whoever opened it.
+   *
+   * A shift's takings are every POS sale on its terminal between openedAt and
+   * closedAt (see getCashMovementForWindow -- it filters by terminal, not by
+   * cashier). Two overlapping shifts on one terminal would therefore each
+   * count the other's sales, so a terminal may only have one open at a time.
+   */
+  async findOpenShiftForTerminal(terminalId: string) {
+    return this.prisma.posShift.findFirst({
+      where: { terminalId, status: 'OPEN' },
+      orderBy: { openedAt: 'desc' },
+      include: { cashier: { select: { firstName: true, lastName: true } } },
+    });
+  }
+
+  async findOpenShift(cashierId: string, terminalId?: string) {
+    return this.prisma.posShift.findFirst({
+      where: {
+        cashierId,
+        status: 'OPEN',
+        ...(terminalId && { terminalId }),
+      },
+      orderBy: { openedAt: 'desc' },
+    });
+  }
+
+  async createShift(params: {
+    terminalId: string;
+    cashierId: string;
+    openingCash: number;
+    notes?: string;
+  }) {
+    return this.prisma.posShift.create({ data: params });
+  }
+
+  async findShiftById(id: string) {
+    return this.prisma.posShift.findUnique({
+      where: { id },
+      include: {
+        cashier: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+  }
+
+  /**
+   * Cash moved in or out of the drawer during a shift, other than by a sale.
+   */
+  async createCashMovement(params: {
+    shiftId: string;
+    terminalId: string;
+    cashierId: string;
+    direction: 'IN' | 'OUT';
+    amount: number;
+    reason: string;
+  }) {
+    return this.prisma.posCashMovement.create({ data: params });
+  }
+
+  async findCashMovementsForShift(shiftId: string) {
+    return this.prisma.posCashMovement.findMany({
+      where: { shiftId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /** Net effect of the shift's cash movements on what should be in the drawer. */
+  async sumCashMovementsForShift(shiftId: string) {
+    const rows = await this.prisma.posCashMovement.groupBy({
+      by: ['direction'],
+      _sum: { amount: true },
+      where: { shiftId },
+    });
+    const total = (direction: string) =>
+      Number(rows.find((r) => r.direction === direction)?._sum.amount ?? 0);
+    const cashIn = total('IN');
+    const cashOut = total('OUT');
+    return { cashIn, cashOut, net: cashIn - cashOut };
+  }
+
+  async closeShift(
+    id: string,
+    data: {
+      closingCashExpected: number;
+      closingCashCounted: number;
+      variance: number;
+      notes?: string;
+    },
+  ) {
+    return this.prisma.posShift.update({
+      where: { id },
+      data: {
+        status: 'CLOSED',
+        closedAt: new Date(),
+        closingCashExpected: data.closingCashExpected,
+        closingCashCounted: data.closingCashCounted,
+        variance: data.variance,
+        ...(data.notes && { notes: data.notes }),
+      },
+    });
+  }
+
+  async listShifts(params: {
+    page: number;
+    limit: number;
+    status?: string;
+    terminalId?: string;
+    cashierId?: string;
+  }) {
+    const where: Prisma.PosShiftWhereInput = {
+      ...(params.status && { status: params.status }),
+      ...(params.terminalId && { terminalId: params.terminalId }),
+      ...(params.cashierId && { cashierId: params.cashierId }),
+    };
+    const [data, total] = await Promise.all([
+      this.prisma.posShift.findMany({
+        where,
+        orderBy: { openedAt: 'desc' },
+        skip: (params.page - 1) * params.limit,
+        take: params.limit,
+        include: {
+          cashier: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+      this.prisma.posShift.count({ where }),
+    ]);
+    return { data, total };
+  }
+
+  async getCashMovementForWindow(
+    terminalId: string,
+    from: Date,
+    to: Date,
+  ): Promise<{ cashSales: number; cashRefunds: number }> {
+    const [salesAgg, refunds] = await Promise.all([
+      // Counted from the payment rows, not from order.paymentMethod: a split
+      // bill is one order but two tenders, and only the cash part belongs in
+      // the drawer expectation the cashier counts against at close.
+      this.prisma.payment.aggregate({
+        _sum: { amount: true },
+        where: {
+          method: 'CASH',
+          status: 'COMPLETED',
+          createdAt: { gte: from, lte: to },
+          order: { terminalId, channel: 'POS_SHOPORA', deletedAt: null },
+        },
+      }),
+      this.prisma.refund.findMany({
+        where: {
+          method: 'CASH',
+          createdAt: { gte: from, lte: to },
+          order: { terminalId, channel: 'POS_SHOPORA' },
+        },
+        select: { amount: true },
+      }),
+    ]);
+    return {
+      cashSales: Number(salesAgg._sum.amount ?? 0),
+      cashRefunds: refunds.reduce((sum, r) => sum + Number(r.amount), 0),
+    };
+  }
+
+  async getShiftSalesBreakdown(terminalId: string, from: Date, to: Date) {
+    const [byMethod, orderCount, refunds] = await Promise.all([
+      // Per tender, so a split bill shows up under both methods it was paid
+      // with rather than under a meaningless "SPLIT" bucket.
+      this.prisma.payment.groupBy({
+        by: ['method'],
+        _sum: { amount: true },
+        _count: true,
+        where: {
+          status: 'COMPLETED',
+          createdAt: { gte: from, lte: to },
+          order: { terminalId, channel: 'POS_SHOPORA', deletedAt: null },
+        },
+      }),
+      this.prisma.order.count({
+        where: {
+          terminalId,
+          channel: 'POS_SHOPORA',
+          deletedAt: null,
+          createdAt: { gte: from, lte: to },
+        },
+      }),
+      this.prisma.refund.findMany({
+        where: {
+          createdAt: { gte: from, lte: to },
+          order: { terminalId, channel: 'POS_SHOPORA' },
+        },
+        select: { amount: true, method: true },
+      }),
+    ]);
+    return {
+      byMethod: byMethod.map((m) => ({
+        method: m.method,
+        revenue: Number(m._sum.amount ?? 0),
+        count: m._count,
+      })),
+      orderCount,
+      refundsCount: refunds.length,
+      refundsAmount: refunds.reduce((sum, r) => sum + Number(r.amount), 0),
+    };
+  }
+
+  async getPosDaySummary(from: Date, to: Date) {
+    const orderWhere: Prisma.OrderWhereInput = {
+      channel: 'POS_SHOPORA',
+      deletedAt: null,
+      createdAt: { gte: from, lte: to },
+    };
+
+    const [byMethod, byTerminal, byCashier, refunds, totalAgg] =
+      await Promise.all([
+        this.prisma.payment.groupBy({
+          by: ['method'],
+          _sum: { amount: true },
+          _count: true,
+          where: {
+            status: 'COMPLETED',
+            createdAt: { gte: from, lte: to },
+            order: { channel: 'POS_SHOPORA', deletedAt: null },
+          },
+        }),
+        this.prisma.order.groupBy({
+          by: ['terminalId'],
+          _sum: { grandTotal: true },
+          _count: true,
+          where: orderWhere,
+        }),
+        this.prisma.order.groupBy({
+          by: ['createdBy'],
+          _sum: { grandTotal: true },
+          _count: true,
+          where: orderWhere,
+        }),
+        this.prisma.refund.findMany({
+          where: {
+            createdAt: { gte: from, lte: to },
+            order: { channel: 'POS_SHOPORA' },
+          },
+          select: { amount: true, order: { select: { terminalId: true } } },
+        }),
+        this.prisma.order.aggregate({
+          _sum: { grandTotal: true },
+          _count: true,
+          where: orderWhere,
+        }),
+      ]);
+
+    const cashierIds = byCashier
+      .map((c) => c.createdBy)
+      .filter((id): id is string => Boolean(id));
+    const cashiers = await this.prisma.user.findMany({
+      where: { id: { in: cashierIds } },
+      select: { id: true, firstName: true, lastName: true },
+    });
+    const cashierMap = new Map(cashiers.map((c) => [c.id, c]));
+
+    const refundsByTerminal = new Map<
+      string,
+      { count: number; amount: number }
+    >();
+    for (const r of refunds) {
+      const key = r.order.terminalId || 'COUNTER_1';
+      const existing = refundsByTerminal.get(key);
+      if (existing) {
+        existing.count += 1;
+        existing.amount += Number(r.amount);
+      } else {
+        refundsByTerminal.set(key, { count: 1, amount: Number(r.amount) });
+      }
+    }
+
+    return {
+      totalRevenue: Number(totalAgg._sum.grandTotal ?? 0),
+      totalOrders: totalAgg._count,
+      byMethod: byMethod.map((m) => ({
+        method: m.method,
+        revenue: Number(m._sum.amount ?? 0),
+        count: m._count,
+      })),
+      byTerminal: byTerminal.map((t) => ({
+        terminalId: t.terminalId,
+        revenue: Number(t._sum.grandTotal ?? 0),
+        orderCount: t._count,
+        refundsCount:
+          refundsByTerminal.get(t.terminalId || 'COUNTER_1')?.count ?? 0,
+        refundsAmount:
+          refundsByTerminal.get(t.terminalId || 'COUNTER_1')?.amount ?? 0,
+      })),
+      byCashier: byCashier
+        .filter((c) => c.createdBy)
+        .map((c) => {
+          const user = cashierMap.get(c.createdBy!);
+          return {
+            cashierId: c.createdBy,
+            cashierName: user
+              ? `${user.firstName} ${user.lastName || ''}`.trim()
+              : 'Unknown',
+            revenue: Number(c._sum.grandTotal ?? 0),
+            orderCount: c._count,
+          };
+        }),
+      totalRefundsCount: refunds.length,
+      totalRefundsAmount: refunds.reduce((sum, r) => sum + Number(r.amount), 0),
+    };
+  }
+}

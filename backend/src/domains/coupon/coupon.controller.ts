@@ -1,0 +1,111 @@
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Param,
+  Body,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
+import { CouponService } from './coupon.service';
+import {
+  CreateCouponDto,
+  UpdateCouponDto,
+  ApplyCouponDto,
+  ValidateCouponDto,
+  CouponQueryDto,
+} from './coupon.types';
+import { JwtAuthGuard, CurrentUser } from '@domains/auth/guards/jwt-auth.guard';
+import {
+  PermissionsGuard,
+  Permissions,
+} from '@domains/auth/guards/permissions.guard';
+import { ThrottleCredentials } from '@common/security/throttle.decorators';
+import { ResponseBuilder } from '@common/responses/response.builder';
+import type { JwtPayload } from '@domains/auth/services/jwt.service';
+
+@ApiTags('Coupons')
+@Controller('coupons')
+export class CouponController {
+  constructor(private readonly couponService: CouponService) {}
+
+  @Get()
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('coupons:view')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List coupons' })
+  async findAll(@Query() query: CouponQueryDto) {
+    return ResponseBuilder.success(await this.couponService.findAll(query));
+  }
+
+  @Get('active')
+  @ApiOperation({ summary: 'List active public coupons for storefront' })
+  async findActivePublic() {
+    return ResponseBuilder.success(await this.couponService.getActiveCoupons());
+  }
+
+  @Get(':id')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('coupons:view')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get coupon by ID' })
+  async findById(@Param('id') id: string) {
+    return ResponseBuilder.success(await this.couponService.findById(id));
+  }
+
+  @Post()
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('coupons:create')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create coupon' })
+  async create(@Body() dto: CreateCouponDto, @CurrentUser() user: JwtPayload) {
+    return ResponseBuilder.created(
+      await this.couponService.create(user.sub, dto),
+    );
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @Permissions('coupons:update')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update coupon' })
+  async update(
+    @Param('id') id: string,
+    @Body() dto: UpdateCouponDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return ResponseBuilder.updated(
+      await this.couponService.update(id, dto, user.sub),
+    );
+  }
+
+  @ThrottleCredentials()
+  @Post('apply')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Apply coupon to order' })
+  async apply(@Body() dto: ApplyCouponDto, @CurrentUser() user: JwtPayload) {
+    return ResponseBuilder.success(
+      await this.couponService.applyCoupon(user.sub, dto),
+    );
+  }
+
+  @ThrottleCredentials()
+  @Post('validate')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Validate a coupon code and preview the discount (no side effects)',
+  })
+  async validate(
+    @Body() dto: ValidateCouponDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return ResponseBuilder.success(
+      await this.couponService.validateCoupon(user.sub, dto),
+    );
+  }
+}

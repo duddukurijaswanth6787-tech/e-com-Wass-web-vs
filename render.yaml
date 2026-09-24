@@ -1,0 +1,53 @@
+services:
+  # NestJS Backend API
+  - type: web
+    name: vasanthi-signature-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install && npx prisma generate && npm run build
+    startCommand: node dist/src/main.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: HOSTNAME
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        fromDatabase:
+          name: vasanthi-postgres-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 86400
+      - key: JWT_REFRESH_TOKEN_EXPIRY_DAYS
+        value: 7
+      - key: JWT_ISSUER
+        value: vasanthi-designers
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: STORAGE_PROVIDER
+        value: local
+      - key: STORAGE_ROOT
+        value: ./storage
+      - key: STORAGE_PUBLIC_URL
+        value: /storage
+      - key: ENABLE_SWAGGER
+        value: "true"
+      - key: ENABLE_REDIS
+        value: "false"
+      - key: ENABLE_BULLMQ
+        value: "false"
+      - key: ENABLE_LOGGER
+        value: "true"
+      - key: PAYMENT_PROVIDER
+        value: dummy
+
+databases:
+  # Managed PostgreSQL Database
+  - name: vasanthi-postgres-db
+    plan: free
+    databaseName: vasanthi_signature
+    user: vasanthi_user

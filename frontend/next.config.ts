@@ -1,0 +1,136 @@
+import type { NextConfig } from "next";
+import path from "path";
+
+const nextConfig: NextConfig = {
+  compress: true,
+  allowedDevOrigins: [
+    '192.168.1.23',
+    '192.168.1.23:3005',
+    '192.168.1.7',
+    '192.168.1.7:3005',
+    'localhost:3005',
+    '0.0.0.0:3005',
+  ],
+  images: {
+    formats: ['image/avif', 'image/webp'],
+    minimumCacheTTL: 2592000,
+    dangerouslyAllowSVG: true,
+    deviceSizes: [640, 750, 828, 1080, 1200],
+    imageSizes: [16, 32, 48, 64, 96, 128, 256, 384],
+    localPatterns: [
+      {
+        pathname: '/**',
+        search: '?*',
+      },
+      {
+        pathname: '/**',
+        search: '',
+      },
+    ],
+    remotePatterns: [
+      {
+        protocol: "http",
+        hostname: "localhost",
+        port: "4000",
+        pathname: "/**",
+      },
+      {
+        protocol: "http",
+        hostname: "192.168.1.23",
+        port: "4000",
+        pathname: "/**",
+      },
+      {
+        protocol: "http",
+        hostname: "192.168.1.7",
+        port: "4000",
+        pathname: "/**",
+      },
+      {
+        protocol: "http",
+        hostname: "127.0.0.1",
+        port: "4000",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "placehold.co",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "images.unsplash.com",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "**.unsplash.com",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "**.amazonaws.com",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "**.cloudfront.net",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "**.railway.app",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "**.up.railway.app",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "api.vasanthissignature.in",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "vasanthissignature.in",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "**.vasanthissignature.in",
+        pathname: "/**",
+      },
+    ],
+  },
+  async redirects() {
+    // Shopora POS moved out from under /admin into its own standalone shell
+    // at /pos (see app/pos/layout.tsx) so a billing-only login never renders
+    // the admin console. Keep old bookmarks and any hardcoded links working.
+    return [
+      { source: '/admin/pos', destination: '/pos', permanent: true },
+      { source: '/admin/pos/add-stock', destination: '/pos/add-stock', permanent: true },
+      { source: '/admin/pos/printers', destination: '/pos/printers', permanent: true },
+      { source: '/catalog', destination: '/collections', permanent: false },
+      { source: '/track', destination: '/track-order', permanent: false },
+      { source: '/faq', destination: '/faqs', permanent: false },
+    ];
+  },
+  async rewrites() {
+    // Only used for local dev when NEXT_PUBLIC_API_BASE_URL is unset (see
+    // frontend/src/lib/api/client.ts). In UAT/production the API base URL is
+    // absolute (Railway URL), so this rewrite is never hit.
+    return [
+      {
+        source: '/api/v1/:path*',
+        destination: `${process.env.BACKEND_INTERNAL_URL || 'http://127.0.0.1:4000'}/api/v1/:path*`,
+      },
+    ];
+  },
+  turbopack: {
+    root: path.resolve(__dirname, ".."),
+  },
+};
+
+export default nextConfig;

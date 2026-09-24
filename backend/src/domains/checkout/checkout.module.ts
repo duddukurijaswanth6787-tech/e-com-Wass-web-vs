@@ -1,0 +1,27 @@
+import { Module } from '@nestjs/common';
+import { AuthModule } from '@domains/auth/auth.module';
+import { AuditModule } from '@domains/audit/audit.module';
+import { CartModule } from '@domains/cart/cart.module';
+import { CouponModule } from '@domains/coupon/coupon.module';
+import { OfferModule } from '@domains/offer/offer.module';
+import { OrderModule } from '@domains/order/order.module';
+import { PaymentModule } from '@domains/payment/payment.module';
+import { TelegramModule } from '@domains/telegram/telegram.module';
+import { CheckoutController } from './checkout.controller';
+import { CheckoutService } from './checkout.service';
+
+@Module({
+  imports: [
+    AuthModule,
+    AuditModule,
+    CartModule,
+    CouponModule,
+    OfferModule,
+    OrderModule,
+    PaymentModule,
+    TelegramModule,
+  ],
+  controllers: [CheckoutController],
+  providers: [CheckoutService],
+})
+export class CheckoutModule {}

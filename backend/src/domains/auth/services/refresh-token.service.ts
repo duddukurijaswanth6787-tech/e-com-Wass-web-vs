@@ -1,0 +1,94 @@
+import { Injectable } from '@nestjs/common';
+import { createHash, randomUUID } from 'node:crypto';
+import { PrismaService } from '@database/prisma.service';
+import { SessionSettingsService } from './session-settings.service';
+
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+@Injectable()
+export class RefreshTokenService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly sessionSettingsService: SessionSettingsService,
+  ) {}
+
+  async create(
+    userId: string,
+    ipAddress?: string,
+    userAgent?: string,
+    rememberMe = false,
+  ): Promise<string> {
+    const settings = await this.sessionSettingsService.getSettings();
+    const minDays = Math.max(
+      settings.refreshTokenDays || 30,
+      Math.ceil((settings.adminSessionHours || 24) / 24),
+      30,
+    );
+    const expiryDays = rememberMe
+      ? settings.rememberMeRefreshTokenDays || 90
+      : minDays;
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + expiryDays);
+
+    const token = randomUUID();
+    await this.prisma.refreshToken.create({
+      data: {
+        token: hashToken(token),
+        userId,
+        ipAddress: ipAddress || null,
+        userAgent: userAgent || null,
+        expiresAt,
+        loginProvider: 'LOCAL',
+      },
+    });
+    return token;
+  }
+
+  async validate(token: string) {
+    const record = await this.prisma.refreshToken.findUnique({
+      where: { token: hashToken(token) },
+    });
+    if (!record || record.isRevoked || record.expiresAt < new Date()) {
+      return null;
+    }
+    await this.prisma.refreshToken.update({
+      where: { id: record.id },
+      data: { lastActivityAt: new Date() },
+    });
+    return record;
+  }
+
+  async revoke(token: string): Promise<void> {
+    await this.prisma.refreshToken.updateMany({
+      where: { token: hashToken(token), isRevoked: false },
+      data: { isRevoked: true, revokedAt: new Date() },
+    });
+  }
+
+  async rotate(
+    token: string,
+    ipAddress?: string,
+    userAgent?: string,
+    rememberMe = false,
+  ): Promise<{ accessToken: string; refreshToken: string } | null> {
+    const record = await this.validate(token);
+    if (!record) return null;
+    await this.revoke(token);
+    const newToken = await this.create(
+      record.userId,
+      ipAddress || record.ipAddress || undefined,
+      userAgent || record.userAgent || undefined,
+      rememberMe,
+    );
+    return { accessToken: '', refreshToken: newToken };
+  }
+
+  async revokeAllForUser(userId: string): Promise<void> {
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, isRevoked: false },
+      data: { isRevoked: true, revokedAt: new Date() },
+    });
+  }
+}

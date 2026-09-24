@@ -1,0 +1,178 @@
+'use client';
+
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { authService } from './auth.service';
+import { resolveSession } from '@/lib/api/client';
+import { queryKeys } from '@/lib/query/client';
+import { UserProfile } from '@/types/auth.types';
+import { customerCartService } from '@/features/customer/cart.service';
+import { clearGuestId } from '@/features/customer/guest';
+
+interface AuthContextType {
+  user: UserProfile | null;
+  isAuthenticated: boolean;
+  isStaffUser: boolean;
+  isInitializing: boolean;
+  login: (credentials: Record<string, unknown>) => Promise<unknown>;
+  completeTokenLogin: () => Promise<unknown>;
+  logout: () => Promise<void>;
+  refetchUser: () => Promise<unknown>;
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+const STAFF_ROLES = ['admin', 'super_admin', 'staff', 'pos_operator', 'pos_staff'];
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient();
+  // The refresh token is an httpOnly cookie (see auth-cookie.util.ts), so JS
+  // cannot read it -- the client has no way to know up-front whether a session
+  // exists and must ask the server. This used to seed from
+  // localStorage('vd_refresh_token'), which nothing writes any more: it read
+  // false on every load, gated the /auth/me query off, and logged the user out
+  // on every full page load or direct URL visit.
+  //
+  // So the session is resolved once from the cookie before /auth/me runs.
+  // Firing it unconditionally meant a signed-out visitor always got a 401,
+  // which the browser logs as a red console error -- unsuppressable from JS,
+  // since it is emitted at the network layer. Asking first avoids the request
+  // entirely, and a signed-in visitor arrives with a token so /auth/me
+  // succeeds first time rather than 401-ing and retrying.
+  //
+  // 'unknown' until that resolves, so the app shows its loading state instead
+  // of briefly deciding the visitor is signed out.
+  // Read cached user synchronously if available for 0ms instantaneous load
+  const getCachedUser = (): UserProfile | null => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const stored = localStorage.getItem('vd_cached_user') || sessionStorage.getItem('vd_cached_user');
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const initialCachedUser = getCachedUser();
+
+  const [session, setSession] = useState<'unknown' | 'none' | 'active'>(() => {
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('vd_access_token') || sessionStorage.getItem('vd_access_token');
+      if (token) return 'active';
+    }
+    return 'unknown';
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    resolveSession()
+      .then((hasSession) => {
+        if (!cancelled) setSession(hasSession ? 'active' : 'none');
+      })
+      .catch(() => {
+        if (!cancelled) setSession('none');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Proactive background silent refresh every 10 minutes when session is active
+  useEffect(() => {
+    if (session !== 'active') return;
+    const interval = setInterval(() => {
+      authService.refresh().catch(() => {});
+    }, 10 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [session]);
+
+  const {
+    data: user = null,
+    isLoading,
+    refetch: refetchUser,
+  } = useQuery({
+    queryKey: queryKeys.auth.me(),
+    queryFn: async () => {
+      const profile = await authService.getMe();
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem('vd_cached_user', JSON.stringify(profile));
+          sessionStorage.setItem('vd_cached_user', JSON.stringify(profile));
+        } catch {}
+      }
+      return profile;
+    },
+    initialData: initialCachedUser || undefined,
+    enabled: session === 'active',
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const loginMutation = useMutation({
+    mutationFn: authService.login,
+    onSuccess: async () => {
+      setSession('active');
+      try {
+        await customerCartService.merge();
+        clearGuestId();
+      } catch {
+        // guest merge is best-effort
+      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.auth.me() });
+      refetchUser();
+    },
+  });
+
+  const logoutMutation = useMutation({
+    mutationFn: authService.logout,
+    onSuccess: () => {
+      setSession('none');
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem('vd_cached_user');
+          sessionStorage.removeItem('vd_cached_user');
+        } catch {}
+      }
+      queryClient.setQueryData(queryKeys.auth.me(), null);
+      queryClient.clear();
+      if (typeof window !== 'undefined') {
+        window.location.href = '/login';
+      }
+    },
+  });
+
+  // Non-blocking initialization: if user profile is already cached in memory, instant render!
+  const isInitializing = (session === 'unknown' && !user) || (session === 'active' && isLoading && !user);
+  const isStaffUser = !!user && user.roles.some((r) => STAFF_ROLES.includes(r));
+
+  const value: AuthContextType = {
+    user,
+    isAuthenticated: !!user,
+    isStaffUser,
+    isInitializing,
+    login: async (credentials) => loginMutation.mutateAsync(credentials),
+    completeTokenLogin: async () => {
+      setSession('active');
+      try {
+        await customerCartService.merge();
+        clearGuestId();
+      } catch {
+        // ignore
+      }
+      queryClient.invalidateQueries({ queryKey: queryKeys.auth.me() });
+      return refetchUser();
+    },
+    logout: async () => logoutMutation.mutateAsync(),
+    refetchUser,
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+}

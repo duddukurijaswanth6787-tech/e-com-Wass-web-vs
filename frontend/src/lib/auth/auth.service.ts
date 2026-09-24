@@ -1,0 +1,60 @@
+import axios from 'axios';
+import { apiClient, setClientTokens, getClientRefreshToken, getApiBaseUrl } from '@/lib/api/client';
+import { AuthTokens, UserProfile } from '@/types/auth.types';
+import { StandardResponse } from '@/types/api.types';
+import { customerWishlistService } from '@/features/customer/wishlist.service';
+
+export const authService = {
+  login: async (credentials: Record<string, unknown>): Promise<AuthTokens> => {
+    const response = await apiClient.post<StandardResponse<AuthTokens>>('/auth/login', credentials);
+    const tokens = response.data.data;
+    if (!tokens) throw new Error(response.data.message || 'Login failed');
+    setClientTokens(tokens);
+    customerWishlistService.syncGuestWishlist().catch(() => {});
+    return tokens;
+  },
+
+  logout: async (): Promise<void> => {
+    try {
+      const refreshToken = getClientRefreshToken();
+      await apiClient.post('/auth/logout', refreshToken ? { refreshToken } : {});
+    } catch {
+      // Silently catch so that frontend logout completes regardless
+    }
+    setClientTokens(null);
+  },
+
+  getMe: async (): Promise<UserProfile> => {
+    const response = await apiClient.get<StandardResponse<UserProfile>>('/auth/me');
+    const profile = response.data.data;
+    if (!profile) throw new Error(response.data.message || 'Failed to fetch user profile');
+    return profile;
+  },
+
+  changePassword: async (currentPassword: string, newPassword: string): Promise<void> => {
+    await apiClient.post<StandardResponse<null>>('/auth/change-password', {
+      currentPassword,
+      newPassword,
+    });
+  },
+
+  refresh: async (): Promise<AuthTokens | null> => {
+    try {
+      const refreshToken = getClientRefreshToken();
+      const response = await axios.post<StandardResponse<AuthTokens>>(
+        `${getApiBaseUrl()}/auth/refresh`,
+        refreshToken ? { refreshToken } : {},
+        { withCredentials: true }
+      );
+      const tokens = response.data?.data;
+      if (tokens?.accessToken) {
+        setClientTokens(tokens);
+        return tokens;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  },
+};
+

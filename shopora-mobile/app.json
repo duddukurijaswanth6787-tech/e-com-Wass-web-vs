@@ -1,0 +1,67 @@
+{
+  "expo": {
+    "name": "Shopora Mobile POS",
+    "slug": "shopora-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "shopora",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": false,
+    "splash": {
+      "backgroundColor": "#f0f9ff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vasanthi.shopora"
+    },
+    "android": {
+      "backgroundColor": "#f0f9ff",
+      "package": "com.vasanthi.shopora",
+      "permissions": [
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-asset",
+      "expo-font",
+      "expo-status-bar",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Shopora to access your camera to scan barcodes."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "The app accesses your photos to scan barcodes from images."
+        }
+      ],
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false,
+          "modes": [
+            "central"
+          ],
+          "bluetoothAlwaysPermission": "Allow Shopora to connect to your Bluetooth barcode scanner."
+        }
+      ],
+      "./plugins/withAndroidJetifier"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "62342501-b74f-4cca-8b18-d5071263b321"
+      }
+    },
+    "owner": "nany6787"
+  }
+}

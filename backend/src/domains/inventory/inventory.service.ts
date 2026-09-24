@@ -1,0 +1,611 @@
+import { Injectable } from '@nestjs/common';
+import { BusinessException, ValidationException } from '@common/exceptions';
+import { AuditService } from '@domains/audit/audit.service';
+import { NotificationService } from '@domains/notification/notification.service';
+import { calculateStockStatus } from '@shared/inventory/stock-status.util';
+import { PrismaService } from '@database/prisma.service';
+import { InventoryRepository } from './inventory.repository';
+import {
+  CreateInventoryDto,
+  UpdateInventoryDto,
+  AdjustStockDto,
+  StockMovementDto,
+  InventoryQueryDto,
+  MovementQueryDto,
+  InventoryResponse,
+  InventoryMovementResponse,
+  SubscribeRestockDto,
+} from './inventory.types';
+
+@Injectable()
+export class InventoryService {
+  constructor(
+    private readonly inventoryRepository: InventoryRepository,
+    private readonly auditService: AuditService,
+    private readonly notificationService: NotificationService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  private toResponse(i: any): InventoryResponse {
+    const available = i.availableQuantity - i.reservedQuantity;
+    return {
+      id: i.id,
+      variantId: i.variantId,
+      variant: i.variant
+        ? {
+            id: i.variant.id,
+            sku: i.variant.sku,
+            title: i.variant.title,
+            barcode: i.variant.barcode,
+            productId: i.variant.productId,
+            productName: i.variant.product?.name,
+          }
+        : undefined,
+      availableQuantity: i.availableQuantity,
+      reservedQuantity: i.reservedQuantity,
+      damagedQuantity: i.damagedQuantity,
+      returnedQuantity: i.returnedQuantity,
+      availableStock: available,
+      minimumStock: i.minimumStock,
+      maximumStock: i.maximumStock,
+      reorderLevel: i.reorderLevel,
+      stockStatus: i.stockStatus,
+      allowBackorder: i.allowBackorder,
+      trackInventory: i.trackInventory,
+      createdAt: i.createdAt,
+      updatedAt: i.updatedAt,
+    };
+  }
+
+  private toMovementResponse(m: any): InventoryMovementResponse {
+    return {
+      id: m.id,
+      inventoryId: m.inventoryId,
+      variantId: m.variantId,
+      movementType: m.movementType,
+      quantity: m.quantity,
+      previousQuantity: m.previousQuantity,
+      newQuantity: m.newQuantity,
+      referenceType: m.referenceType ?? undefined,
+      referenceId: m.referenceId ?? undefined,
+      reason: m.reason ?? undefined,
+      remarks: m.remarks ?? undefined,
+      performedBy: m.performedBy ?? undefined,
+      createdAt: m.createdAt,
+    };
+  }
+
+  private async updateStockStatus(id: string, userId?: string) {
+    const inv = await this.inventoryRepository.findById(id);
+    if (!inv) return;
+    const status = calculateStockStatus(inv);
+    if (status !== inv.stockStatus) {
+      await this.inventoryRepository.update(id, { stockStatus: status });
+      if (userId && (status === 'LOW_STOCK' || status === 'OUT_OF_STOCK')) {
+        const stockType = status === 'LOW_STOCK' ? 'LOW_STOCK' : 'OUT_OF_STOCK';
+        const title =
+          status === 'LOW_STOCK' ? 'Low Stock Alert' : 'Out of Stock';
+        await this.notificationService.create({
+          userId,
+          type: stockType,
+          title,
+          message: `Variant ${inv.variantId} is now ${status.toLowerCase()}`,
+          data: {
+            inventoryId: id,
+            variantId: inv.variantId,
+            stockStatus: status,
+          },
+        });
+      }
+    }
+  }
+
+  async findAll(query: InventoryQueryDto) {
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, 100);
+    const result = await this.inventoryRepository.findAll({
+      variantId: query.variantId,
+      stockStatus: query.stockStatus,
+      lowStock: query.lowStock,
+      outOfStock: query.outOfStock,
+      page,
+      limit,
+      sortBy: query.sortBy ?? 'createdAt',
+      sortOrder: query.sortOrder ?? 'desc',
+    });
+    return {
+      data: result.data.map((i) => this.toResponse(i)),
+      meta: result.meta,
+    };
+  }
+
+  async findById(id: string) {
+    const inv = await this.inventoryRepository.findById(id);
+    if (!inv)
+      throw new BusinessException('Inventory not found', 'INVENTORY_001');
+    return this.toResponse(inv);
+  }
+
+  async findByVariantId(variantId: string) {
+    const inv = await this.inventoryRepository.findByVariantId(variantId);
+    if (!inv)
+      throw new BusinessException(
+        'Inventory not found for variant',
+        'INVENTORY_001',
+      );
+    return this.toResponse(inv);
+  }
+
+  async create(dto: CreateInventoryDto, userId: string) {
+    const existing = await this.inventoryRepository.findByVariantId(
+      dto.variantId,
+    );
+    if (existing)
+      throw new BusinessException(
+        'Inventory already exists for this variant',
+        'INVENTORY_002',
+      );
+
+    const available = dto.availableQuantity ?? 0;
+    const minimumStock = dto.minimumStock ?? 0;
+    const reorderLevel = dto.reorderLevel ?? 0;
+    const status = calculateStockStatus({
+      availableQuantity: available,
+      reservedQuantity: 0,
+      minimumStock,
+      reorderLevel,
+      allowBackorder: dto.allowBackorder ?? false,
+    });
+
+    const inv = await this.inventoryRepository.create({
+      variant: { connect: { id: dto.variantId } },
+      availableQuantity: available,
+      minimumStock,
+      maximumStock: dto.maximumStock ?? 0,
+      reorderLevel,
+      stockStatus: status,
+      allowBackorder: dto.allowBackorder ?? false,
+      trackInventory: dto.trackInventory ?? true,
+    });
+
+    if (available > 0) {
+      await this.inventoryRepository.createMovement({
+        inventory: { connect: { id: inv.id } },
+        variantId: dto.variantId,
+        movementType: 'MANUAL_ADD',
+        quantity: available,
+        previousQuantity: 0,
+        newQuantity: available,
+        reason: dto.reason ?? 'Initial stock',
+        remarks: dto.remarks,
+        performedBy: userId,
+      });
+    }
+
+    await this.auditService.log({
+      action: 'INVENTORY_CREATED',
+      module: 'inventory',
+      resource: 'inventory',
+      resourceId: inv.id,
+      userId,
+      newValue: { variantId: dto.variantId, available },
+    });
+    return this.toResponse(inv);
+  }
+
+  async update(id: string, dto: UpdateInventoryDto, userId: string) {
+    const inv = await this.inventoryRepository.findById(id);
+    if (!inv)
+      throw new BusinessException('Inventory not found', 'INVENTORY_001');
+
+    const { availableQuantity, ...rest } = dto;
+    const updateData: any = { ...rest };
+    if (availableQuantity !== undefined) {
+      updateData.availableQuantity = availableQuantity;
+    }
+
+    await this.inventoryRepository.update(id, updateData);
+
+    if (
+      availableQuantity !== undefined &&
+      availableQuantity !== inv.availableQuantity
+    ) {
+      const delta = availableQuantity - inv.availableQuantity;
+      await this.inventoryRepository.createMovement({
+        inventory: { connect: { id } },
+        variantId: inv.variantId,
+        movementType: 'ADJUSTMENT',
+        quantity: delta,
+        previousQuantity: inv.availableQuantity,
+        newQuantity: availableQuantity,
+        reason: 'Catalog stock update',
+        performedBy: userId,
+      });
+    }
+
+    await this.updateStockStatus(id, userId);
+
+    await this.auditService.log({
+      action: 'INVENTORY_UPDATED',
+      module: 'inventory',
+      resource: 'inventory',
+      resourceId: id,
+      userId,
+      newValue: { ...dto },
+    });
+    return this.findById(id);
+  }
+
+  async increaseStock(id: string, dto: StockMovementDto, userId: string) {
+    const inv = await this.inventoryRepository.findById(id);
+    if (!inv)
+      throw new BusinessException('Inventory not found', 'INVENTORY_001');
+
+    if (dto.referenceType && dto.referenceId) {
+      const existing = await this.inventoryRepository.findMovementByReference(
+        id,
+        dto.referenceType,
+        dto.referenceId,
+      );
+      // Replay of an offline-queued stock-in that already landed -- return the
+      // current state instead of crediting the stock a second time.
+      if (existing) return this.findById(id);
+    }
+
+    const prev = inv.availableQuantity;
+    const next = prev + dto.quantity;
+
+    await this.inventoryRepository.updateStock(id, { availableQuantity: next });
+    await this.updateStockStatus(id, userId);
+
+    await this.inventoryRepository.createMovement({
+      inventory: { connect: { id } },
+      variantId: inv.variantId,
+      movementType: 'MANUAL_ADD',
+      quantity: dto.quantity,
+      previousQuantity: prev,
+      newQuantity: next,
+      reason: dto.reason,
+      remarks: dto.remarks,
+      referenceType: dto.referenceType,
+      referenceId: dto.referenceId,
+      performedBy: userId,
+    });
+
+    await this.auditService.log({
+      action: 'STOCK_INCREASED',
+      module: 'inventory',
+      resource: 'inventory',
+      resourceId: id,
+      userId,
+      newValue: { quantity: dto.quantity },
+    });
+    return this.findById(id);
+  }
+
+  async decreaseStock(id: string, dto: StockMovementDto, userId: string) {
+    const inv = await this.inventoryRepository.findById(id);
+    if (!inv)
+      throw new BusinessException('Inventory not found', 'INVENTORY_001');
+
+    const prev = inv.availableQuantity;
+    const next = prev - dto.quantity;
+    if (next < 0)
+      throw new ValidationException('Insufficient stock', 'INVENTORY_003');
+
+    await this.inventoryRepository.updateStock(id, { availableQuantity: next });
+    await this.updateStockStatus(id, userId);
+
+    await this.inventoryRepository.createMovement({
+      inventory: { connect: { id } },
+      variantId: inv.variantId,
+      movementType: 'MANUAL_REMOVE',
+      quantity: dto.quantity,
+      previousQuantity: prev,
+      newQuantity: next,
+      reason: dto.reason,
+      remarks: dto.remarks,
+      performedBy: userId,
+    });
+
+    await this.auditService.log({
+      action: 'STOCK_DECREASED',
+      module: 'inventory',
+      resource: 'inventory',
+      resourceId: id,
+      userId,
+      newValue: { quantity: dto.quantity },
+    });
+    return this.findById(id);
+  }
+
+  /**
+   * Sets available stock to an exact target count (e.g. reconciling to a
+   * physical stock take), not a delta -- dto.quantity is the new absolute
+   * quantity. The signed difference from the current quantity is what gets
+   * logged as the movement's `quantity`, matching every other movement type
+   * where `quantity` means "how much moved."
+   */
+  async adjustStock(id: string, dto: AdjustStockDto, userId: string) {
+    const inv = await this.inventoryRepository.findById(id);
+    if (!inv)
+      throw new BusinessException('Inventory not found', 'INVENTORY_001');
+
+    const prev = inv.availableQuantity;
+    const next = dto.quantity;
+    const delta = next - prev;
+
+    await this.inventoryRepository.updateStock(id, { availableQuantity: next });
+    await this.updateStockStatus(id, userId);
+
+    await this.inventoryRepository.createMovement({
+      inventory: { connect: { id } },
+      variantId: inv.variantId,
+      movementType: 'ADJUSTMENT',
+      quantity: delta,
+      previousQuantity: prev,
+      newQuantity: next,
+      reason: dto.reason,
+      remarks: dto.remarks,
+      performedBy: userId,
+    });
+
+    await this.auditService.log({
+      action: 'STOCK_ADJUSTED',
+      module: 'inventory',
+      resource: 'inventory',
+      resourceId: id,
+      userId,
+      oldValue: { quantity: prev },
+      newValue: { quantity: next, reason: dto.reason },
+    });
+    return this.findById(id);
+  }
+
+  async reserveStock(id: string, dto: StockMovementDto, userId: string) {
+    const inv = await this.inventoryRepository.findById(id);
+    if (!inv)
+      throw new BusinessException('Inventory not found', 'INVENTORY_001');
+
+    const available = inv.availableQuantity - inv.reservedQuantity;
+    if (dto.quantity > available)
+      throw new ValidationException(
+        'Cannot reserve more than available stock',
+        'INVENTORY_005',
+      );
+
+    const prev = inv.reservedQuantity;
+    const next = prev + dto.quantity;
+
+    await this.inventoryRepository.updateStock(id, { reservedQuantity: next });
+    await this.updateStockStatus(id, userId);
+
+    await this.inventoryRepository.createMovement({
+      inventory: { connect: { id } },
+      variantId: inv.variantId,
+      movementType: 'RESERVED',
+      quantity: dto.quantity,
+      previousQuantity: prev,
+      newQuantity: next,
+      reason: dto.reason,
+      referenceType: dto.referenceType,
+      referenceId: dto.referenceId,
+      performedBy: userId,
+    });
+
+    await this.auditService.log({
+      action: 'STOCK_RESERVED',
+      module: 'inventory',
+      resource: 'inventory',
+      resourceId: id,
+      userId,
+      newValue: { quantity: dto.quantity },
+    });
+    return this.findById(id);
+  }
+
+  async releaseStock(id: string, dto: StockMovementDto, userId: string) {
+    const inv = await this.inventoryRepository.findById(id);
+    if (!inv)
+      throw new BusinessException('Inventory not found', 'INVENTORY_001');
+
+    if (dto.quantity > inv.reservedQuantity)
+      throw new ValidationException(
+        'Cannot release more than reserved stock',
+        'INVENTORY_006',
+      );
+
+    const prev = inv.reservedQuantity;
+    const next = prev - dto.quantity;
+
+    await this.inventoryRepository.updateStock(id, { reservedQuantity: next });
+    await this.updateStockStatus(id, userId);
+
+    await this.inventoryRepository.createMovement({
+      inventory: { connect: { id } },
+      variantId: inv.variantId,
+      movementType: 'UNRESERVED',
+      quantity: dto.quantity,
+      previousQuantity: prev,
+      newQuantity: next,
+      reason: dto.reason,
+      performedBy: userId,
+    });
+
+    await this.auditService.log({
+      action: 'STOCK_RELEASED',
+      module: 'inventory',
+      resource: 'inventory',
+      resourceId: id,
+      userId,
+      newValue: { quantity: dto.quantity },
+    });
+    return this.findById(id);
+  }
+
+  async returnStock(id: string, dto: StockMovementDto, userId: string) {
+    const inv = await this.inventoryRepository.findById(id);
+    if (!inv)
+      throw new BusinessException('Inventory not found', 'INVENTORY_001');
+
+    const prevAvail = inv.availableQuantity;
+    const prevReturned = inv.returnedQuantity;
+
+    await this.inventoryRepository.updateStock(id, {
+      availableQuantity: prevAvail + dto.quantity,
+      returnedQuantity: prevReturned + dto.quantity,
+    });
+    await this.updateStockStatus(id, userId);
+
+    await this.inventoryRepository.createMovement({
+      inventory: { connect: { id } },
+      variantId: inv.variantId,
+      movementType: 'RETURN',
+      quantity: dto.quantity,
+      previousQuantity: prevAvail,
+      newQuantity: prevAvail + dto.quantity,
+      reason: dto.reason,
+      referenceType: dto.referenceType,
+      referenceId: dto.referenceId,
+      performedBy: userId,
+    });
+
+    await this.auditService.log({
+      action: 'STOCK_RETURNED',
+      module: 'inventory',
+      resource: 'inventory',
+      resourceId: id,
+      userId,
+      newValue: { quantity: dto.quantity },
+    });
+    return this.findById(id);
+  }
+
+  async damageStock(id: string, dto: StockMovementDto, userId: string) {
+    const inv = await this.inventoryRepository.findById(id);
+    if (!inv)
+      throw new BusinessException('Inventory not found', 'INVENTORY_001');
+
+    const available = inv.availableQuantity - inv.reservedQuantity;
+    if (dto.quantity > available)
+      throw new ValidationException(
+        'Cannot damage more than available stock',
+        'INVENTORY_007',
+      );
+
+    const prevAvail = inv.availableQuantity;
+    const prevDamaged = inv.damagedQuantity;
+
+    await this.inventoryRepository.updateStock(id, {
+      availableQuantity: prevAvail - dto.quantity,
+      damagedQuantity: prevDamaged + dto.quantity,
+    });
+    await this.updateStockStatus(id, userId);
+
+    await this.inventoryRepository.createMovement({
+      inventory: { connect: { id } },
+      variantId: inv.variantId,
+      movementType: 'DAMAGE',
+      quantity: dto.quantity,
+      previousQuantity: prevAvail,
+      newQuantity: prevAvail - dto.quantity,
+      reason: dto.reason,
+      remarks: dto.remarks,
+      performedBy: userId,
+    });
+
+    await this.auditService.log({
+      action: 'STOCK_DAMAGED',
+      module: 'inventory',
+      resource: 'inventory',
+      resourceId: id,
+      userId,
+      newValue: { quantity: dto.quantity },
+    });
+    return this.findById(id);
+  }
+
+  async findMovements(query: MovementQueryDto) {
+    const page = query.page ?? 1;
+    const limit = Math.min(query.limit ?? 20, 100);
+    const result = await this.inventoryRepository.findMovements({
+      inventoryId: query.inventoryId,
+      variantId: query.variantId,
+      movementType: query.movementType,
+      page,
+      limit,
+      sortBy: query.sortBy ?? 'createdAt',
+      sortOrder: query.sortOrder ?? 'desc',
+    });
+    return {
+      data: result.data.map((m) => this.toMovementResponse(m)),
+      meta: result.meta,
+    };
+  }
+
+  async getStockSummary() {
+    return this.inventoryRepository.getStockSummary();
+  }
+
+  async subscribeRestock(dto: SubscribeRestockDto) {
+    if (!dto.phone?.trim() && !dto.email?.trim()) {
+      throw new BusinessException(
+        'Please provide either a phone number or email address to receive restock notifications.',
+        'INVALID_CONTACT_INFO',
+      );
+    }
+
+    const product = await this.prisma.product.findUnique({
+      where: { id: dto.productId },
+      select: { id: true, name: true, sku: true },
+    });
+
+    if (!product) {
+      throw new BusinessException('Product not found', 'PRODUCT_NOT_FOUND');
+    }
+
+    const subscription = await this.prisma.restockSubscription.create({
+      data: {
+        productId: dto.productId,
+        variantId: dto.variantId || null,
+        size: dto.size || null,
+        color: dto.color || null,
+        email: dto.email ? dto.email.trim().toLowerCase() : null,
+        phone: dto.phone ? dto.phone.trim() : null,
+        status: 'PENDING',
+      },
+    });
+
+    const contactStr = [dto.phone, dto.email].filter(Boolean).join(' / ');
+    const specStr = [
+      dto.color ? `Color: ${dto.color}` : null,
+      dto.size ? `Size: ${dto.size}` : null,
+    ]
+      .filter(Boolean)
+      .join(', ');
+
+    this.notificationService
+      .notifyAdmins(
+        'NEW_CUSTOMER',
+        `🔔 Customer Requested Restock Alert`,
+        `Customer requested alert for "${product.name}"${specStr ? ` (${specStr})` : ''}. Contact: ${contactStr}`,
+        {
+          productId: dto.productId,
+          variantId: dto.variantId,
+          productName: product.name,
+          size: dto.size,
+          color: dto.color,
+          phone: dto.phone,
+          email: dto.email,
+          subscriptionId: subscription.id,
+        },
+      )
+      .catch(() => {});
+
+    return {
+      success: true,
+      message: 'You will be notified as soon as this item is back in stock!',
+      subscriptionId: subscription.id,
+    };
+  }
+}

@@ -1,0 +1,106 @@
+'use client';
+
+import React, { useMemo } from 'react';
+import Link from 'next/link';
+import Image from 'next/image';
+import { MobileScrollSection } from '@/components/layout/MobileScrollSection';
+import { useFeaturedCategories } from '@/features/customer/hooks';
+import { isLocalOrPlaceholder, withVariant } from '@/lib/media-url';
+import { PLACEHOLDER_IMAGE } from '@/features/customer/mappers';
+
+interface CollectionItem {
+  name: string;
+  slug: string;
+  image: string;
+}
+
+function CollectionCard({ item }: { item: CollectionItem }) {
+  return (
+    <Link
+      href={`/categories/${item.slug}`}
+      className="group relative rounded-2xl overflow-hidden aspect-[4/5] bg-neutral-100 shadow-2xs hover:shadow-md transition-all duration-300 border border-neutral-200/60 w-[140px] sm:w-48 lg:w-full shrink-0 snap-start"
+    >
+      <Image
+        src={withVariant(item.image, 'medium')}
+        alt={item.name}
+        fill
+        sizes="(max-width: 640px) 40vw, 20vw"
+        unoptimized={isLocalOrPlaceholder(item.image)}
+        className="object-cover group-hover:scale-108 transition-transform duration-700"
+      />
+      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent transition-opacity duration-300" />
+      <div className="absolute bottom-3 left-3 right-3 text-left space-y-0.5 z-10">
+        <h3 className="text-sm font-bold font-serif text-white tracking-wide drop-shadow-sm">
+          {item.name}
+        </h3>
+        <p className="text-[10px] text-sky-200 font-semibold uppercase tracking-widest drop-shadow-xs">
+          Collection
+        </p>
+      </div>
+    </Link>
+  );
+}
+
+export function FeaturedCollections() {
+  const { data: catData, isLoading } = useFeaturedCategories();
+
+  // Reuses the same "Featured" toggle admin already sets per-category
+  // (Admin → Categories → edit → Featured) — no separate "Collections"
+  // admin screen needed. Real name, slug, and uploaded image; no
+  // hardcoded fallback content.
+  const collections: CollectionItem[] = useMemo(() => {
+    const typed = catData as { data?: unknown[] } | unknown[];
+    const list = Array.isArray(typed) ? typed : Array.isArray((typed as { data?: unknown[] })?.data) ? (typed as { data?: unknown[] }).data! : [];
+
+    return list.map((cat) => {
+      const c = cat as Record<string, unknown>;
+      const rawImg = String(c.image || c.icon || c.imageUrl || c.primaryImageUrl || '');
+      return {
+        name: String(c.name || ''),
+        slug: String(c.slug || ''),
+        image: (!rawImg || rawImg.includes('data:image/svg')) ? PLACEHOLDER_IMAGE : rawImg,
+      };
+    });
+  }, [catData]);
+
+  if (collections.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="w-full max-w-[1440px] mx-auto py-4 sm:py-8">
+      {/* Header (Hidden on Mobile, Visible on Desktop/Tablet) */}
+      <div className="hidden sm:flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6 px-4 sm:px-8 lg:px-12">
+        <div className="space-y-1">
+          <span className="text-xs font-bold text-[#1769D2] uppercase tracking-widest bg-[#EAF4FF] px-3 py-1 rounded-full border border-[#DCEBFA]">
+            Trending Collections
+          </span>
+          <h2 className="text-2xl sm:text-3xl font-bold font-serif text-neutral-900 tracking-tight pt-1">
+            Styles That Everyone Is Loving Right Now!
+          </h2>
+        </div>
+        <Link
+          href="/categories"
+          className="inline-flex items-center justify-center bg-[#1769D2] hover:bg-[var(--brand-primary-dark)] text-white text-xs font-bold uppercase tracking-wider px-5 py-3 rounded-xl shadow-xs transition-all hover:scale-105 shrink-0 self-start md:self-auto"
+        >
+          <span>Explore Collection</span>
+          <span className="ml-1">→</span>
+        </Link>
+      </div>
+
+      {/* Mobile Scroll Section */}
+      <MobileScrollSection title="Trending Collections">
+        {collections.map((item) => (
+          <CollectionCard key={item.slug} item={item} />
+        ))}
+      </MobileScrollSection>
+
+      {/* Desktop Grid Section */}
+      <div className="hidden lg:grid lg:grid-cols-5 lg:gap-5 px-12">
+        {collections.map((item) => (
+          <CollectionCard key={item.slug} item={item} />
+        ))}
+      </div>
+    </section>
+  );
+}

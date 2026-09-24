@@ -1,0 +1,108 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsString,
+  IsOptional,
+  IsUUID,
+  IsInt,
+  Min,
+  Max,
+  IsArray,
+  ValidateNested,
+  IsEnum,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+
+export enum ReturnStatus {
+  REQUESTED = 'REQUESTED',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  PICKUP_SCHEDULED = 'PICKUP_SCHEDULED',
+  PICKED_UP = 'PICKED_UP',
+  WAREHOUSE_RECEIVED = 'WAREHOUSE_RECEIVED',
+  INSPECTION = 'INSPECTION',
+  REFUND_INITIATED = 'REFUND_INITIATED',
+  REFUND_COMPLETED = 'REFUND_COMPLETED',
+  CANCELLED = 'CANCELLED',
+}
+
+export enum RefundPreference {
+  ORIGINAL_PAYMENT = 'ORIGINAL_PAYMENT',
+  WALLET = 'WALLET',
+  BANK_TRANSFER = 'BANK_TRANSFER',
+  STORE_CREDIT = 'STORE_CREDIT',
+}
+
+export class ReturnItemDto {
+  @ApiProperty() @IsUUID() orderItemId!: string;
+  @ApiProperty() @Type(() => Number) @IsInt() @Min(1) quantity!: number;
+  @ApiPropertyOptional() @IsOptional() @IsString() reason?: string;
+}
+
+export class CreateReturnDto {
+  @ApiProperty() @IsUUID() orderId!: string;
+  @ApiProperty() @IsString() reason!: string;
+  @ApiPropertyOptional({ enum: RefundPreference })
+  @IsOptional()
+  @IsEnum(RefundPreference)
+  refundPreference?: RefundPreference;
+
+  @ApiPropertyOptional({ type: [ReturnItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ReturnItemDto)
+  items?: ReturnItemDto[];
+}
+
+export class UpdateReturnStatusDto {
+  @ApiProperty({ enum: ReturnStatus })
+  @IsEnum(ReturnStatus)
+  status!: ReturnStatus;
+  @ApiPropertyOptional() @IsOptional() @IsString() adminNotes?: string;
+}
+
+export class ReturnItemImageResponse {
+  @ApiProperty() id!: string;
+  @ApiProperty() url!: string;
+  @ApiProperty() displayOrder!: number;
+}
+
+export class ReturnItemResponse {
+  @ApiProperty() id!: string;
+  @ApiProperty() orderItemId!: string;
+  @ApiProperty() quantity!: number;
+  @ApiPropertyOptional() reason?: string;
+  @ApiPropertyOptional({ type: [ReturnItemImageResponse] })
+  images?: ReturnItemImageResponse[];
+}
+
+export class ReturnRequestResponse {
+  @ApiProperty() id!: string;
+  @ApiProperty() orderId!: string;
+  @ApiProperty() returnNumber!: string;
+  @ApiProperty() reason!: string;
+  @ApiProperty() status!: string;
+  @ApiPropertyOptional() refundPreference?: string;
+  @ApiPropertyOptional() adminNotes?: string;
+  @ApiPropertyOptional({ type: [ReturnItemResponse] })
+  items?: ReturnItemResponse[];
+  @ApiProperty() createdAt!: Date;
+}
+
+export class ReturnQueryDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() status?: string;
+  @ApiPropertyOptional() @IsOptional() @IsUUID() orderId?: string;
+  @ApiPropertyOptional({ default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+  @ApiPropertyOptional({ default: 20 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+}

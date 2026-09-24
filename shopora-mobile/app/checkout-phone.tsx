@@ -1,0 +1,1224 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  Image,
+} from 'react-native';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
+import { QrCode, Banknote, Tag, Sparkles, Check, History, Clock, RefreshCw, CheckCircle2, AlertCircle, FileText } from 'lucide-react-native';
+import {
+  posMobileService,
+  paymentService,
+  RazorpayQrData,
+  PosMobileCartItem,
+  PosMobileCustomer,
+  getApiErrorMessage,
+  isAuthenticated,
+} from '../services/api';
+import { useOfflineSync, isNetworkFailure } from '../services/offline/useOfflineSync';
+import { ConnectivityBadge } from '../components/ConnectivityBadge';
+import { getTerminalId } from '../services/terminal';
+import { buildUpiUri } from '../services/upi';
+import { UpiQrView } from '../components/UpiQrView';
+import { getGlobalCart } from './sale';
+import * as SecureStore from 'expo-secure-store';
+
+const STORE_VPA_KEY = 'pos_store_upi_vpa';
+
+export default function MobilePaymentScreen() {
+  const router = useRouter();
+  const params = useLocalSearchParams();
+  const cartJson = params.cartJson as string;
+  const grandTotalStr = params.grandTotal as string;
+  const customerJson = params.customerJson as string;
+
+  let customer: PosMobileCustomer = { fullName: 'Walk-in Customer', phone: '9999999999' };
+  try {
+    if (customerJson) customer = JSON.parse(customerJson);
+  } catch (e) {
+    console.error('Failed to parse customer:', e);
+  }
+
+  const couponCodeParam = (params.couponCode as string) || '';
+  const couponDiscountParam = Number(params.couponDiscount || '0');
+
+  // Phone App Payment Methods: UPI QR and CASH Only
+  const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'UPI'>('UPI');
+  const [loading, setLoading] = useState(false);
+
+  // Dynamic UPI Store VPA & Provider
+  const [upiProvider, setUpiProvider] = useState<'RAZORPAY' | 'DIRECT_NPCI'>('RAZORPAY');
+  const [razorpayQr, setRazorpayQr] = useState<RazorpayQrData | null>(null);
+  const [razorpayLoading, setRazorpayLoading] = useState(false);
+  const [razorpayError, setRazorpayError] = useState('');
+  const [razorpayPaid, setRazorpayPaid] = useState(false);
+
+  const [storeVpa, setStoreVpa] = useState('vasanthisignature@okhdfcbank');
+  const [editingVpa, setEditingVpa] = useState(false);
+  const [tempVpa, setTempVpa] = useState('vasanthisignature@okhdfcbank');
+
+  useEffect(() => {
+    SecureStore.getItemAsync(STORE_VPA_KEY).then((saved) => {
+      if (saved && saved.trim()) {
+        setStoreVpa(saved.trim());
+        setTempVpa(saved.trim());
+      }
+    }).catch(() => {});
+  }, []);
+
+  // Coupon at the till & live suggestions
+  const [couponInput, setCouponInput] = useState('');
+  const [couponApplied, setCouponApplied] = useState<{ code: string; discountAmount: number } | null>(
+    couponCodeParam && couponDiscountParam > 0
+      ? { code: couponCodeParam, discountAmount: couponDiscountParam }
+      : null,
+  );
+  const [couponBusy, setCouponBusy] = useState(false);
+  const [couponError, setCouponError] = useState('');
+  const [remarks, setRemarks] = useState('');
+  const [availableCoupons, setAvailableCoupons] = useState<Array<{ code: string; name: string; discountText: string }>>([
+    { code: 'WELCOME10', name: 'Welcome 10% OFF', discountText: '10% OFF' },
+    { code: 'VASANTHI50', name: 'Store Special ₹50 OFF', discountText: '₹50 OFF' },
+    { code: 'FESTIVE20', name: 'Festive 20% OFF', discountText: '20% OFF' },
+    { code: 'SAVE10', name: 'Instant 10% Savings', discountText: '10% OFF' },
+  ]);
+
+  useEffect(() => {
+    posMobileService.getActiveCoupons().then((list) => {
+      if (Array.isArray(list) && list.length > 0) {
+        const mapped = list.map((c: any) => ({
+          code: c.code,
+          name: c.name || c.code,
+          discountText: c.type === 'PERCENTAGE' ? `${c.value}% OFF` : `₹${c.value} OFF`,
+        }));
+        setAvailableCoupons(mapped);
+      }
+    }).catch(() => {});
+  }, []);
+
+  const suggestedCoupons = useMemo(() => {
+    const q = couponInput.trim().toUpperCase();
+    if (!q) return availableCoupons;
+    return availableCoupons.filter(
+      (c) => c.code.toUpperCase().includes(q) || c.name.toUpperCase().includes(q)
+    );
+  }, [couponInput, availableCoupons]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isAuthenticated()) {
+        router.replace('/login?redirect=/checkout-phone');
+      }
+    }, [router]),
+  );
+
+  const offlineSync = useOfflineSync();
+
+  // Billing requires an open shift on this terminal while online, so cash
+  // sales can be reconciled at close -- mirrors the same gate on the web
+  // POS. Offline sales are exempt since shift state can't be checked
+  // without the backend.
+  // This phone is its own register, so its shift and its sales are keyed to
+  // an id stored on the device rather than to the counter till.
+  const [terminalId, setTerminalId] = useState('');
+  const [shiftChecked, setShiftChecked] = useState(false);
+  const [hasOpenShift, setHasOpenShift] = useState(true);
+  const [openingCashInput, setOpeningCashInput] = useState('');
+  const [openingShift, setOpeningShift] = useState(false);
+  const [shiftError, setShiftError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    getTerminalId().then((id) => {
+      if (!cancelled) setTerminalId(id);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!offlineSync.isBackendReachable) {
+      setShiftChecked(true);
+      return;
+    }
+    // Wait for the device's terminal id: looking up the shared default would
+    // report on the counter's register, not this phone's.
+    if (!terminalId) return;
+    let cancelled = false;
+    posMobileService
+      .getCurrentShift(terminalId)
+      .then((shift) => {
+        if (!cancelled) setHasOpenShift(Boolean(shift));
+      })
+      .catch(() => {
+        if (!cancelled) setHasOpenShift(true); // fail open: don't block billing on a lookup error
+      })
+      .finally(() => {
+        if (!cancelled) setShiftChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [offlineSync.isBackendReachable, terminalId]);
+
+  const shiftRequired = shiftChecked && offlineSync.isBackendReachable && !hasOpenShift;
+
+  const handleOpenShift = async () => {
+    const amount = parseFloat(openingCashInput);
+    if (isNaN(amount) || amount < 0) return;
+    try {
+      setOpeningShift(true);
+      setShiftError('');
+      await posMobileService.openShift({ terminalId, openingCash: amount });
+      setHasOpenShift(true);
+      setOpeningCashInput('');
+    } catch (err) {
+      setShiftError(getApiErrorMessage(err, 'Could not open the shift.'));
+    } finally {
+      setOpeningShift(false);
+    }
+  };
+
+  let cartItems: PosMobileCartItem[] = [];
+  try {
+    if (cartJson) {
+      const cleanJson = cartJson.startsWith('%') ? decodeURIComponent(cartJson) : cartJson;
+      cartItems = typeof cleanJson === 'string' ? JSON.parse(cleanJson) : cleanJson;
+    }
+  } catch (e) {
+    console.error('Failed to parse cart items:', e);
+  }
+  if (!Array.isArray(cartItems) || cartItems.length === 0) {
+    cartItems = getGlobalCart();
+  }
+
+  const grandTotal = Number(grandTotalStr || '0');
+  const effectiveTotal = Math.max(0, grandTotal - (couponApplied?.discountAmount || 0));
+
+  const currentUpiUri = useMemo(() => {
+    return buildUpiUri({
+      vpa: storeVpa,
+      merchantName: "Vasanthi Signature",
+      amount: effectiveTotal,
+      note: `POS Sale ${customer?.phone ? customer.phone.slice(-4) : ''}`,
+    });
+  }, [storeVpa, effectiveTotal, customer?.phone]);
+
+  const [razorpaySecondsLeft, setRazorpaySecondsLeft] = useState<number>(120);
+  const [isQrExpired, setIsQrExpired] = useState<boolean>(false);
+
+  // Fetch Razorpay Dynamic QR on Demand
+  const fetchRazorpayQr = useCallback(async () => {
+    setRazorpayLoading(true);
+    setRazorpayError('');
+    setRazorpayPaid(false);
+    setIsQrExpired(false);
+    setRazorpaySecondsLeft(120);
+    try {
+      const data = await paymentService.createRazorpayQr(
+        effectiveTotal,
+        `POS Sale #${customer?.phone ? customer.phone.slice(-4) : Date.now().toString().slice(-4)}`,
+        { phone: customer?.phone || '9999999999', terminalId }
+      );
+      setRazorpayQr(data);
+    } catch (err: unknown) {
+      const msg = getApiErrorMessage(err, 'Could not generate Razorpay QR');
+      setRazorpayError(msg);
+    } finally {
+      setRazorpayLoading(false);
+    }
+  }, [effectiveTotal, customer?.phone, terminalId]);
+
+  // 2-Minute Expiry Countdown Timer
+  useEffect(() => {
+    if (
+      paymentMethod !== 'UPI' ||
+      upiProvider !== 'RAZORPAY' ||
+      !razorpayQr?.qrId ||
+      razorpayPaid ||
+      isQrExpired
+    ) {
+      return;
+    }
+
+    const timer = setInterval(() => {
+      setRazorpaySecondsLeft((prev) => {
+        if (prev <= 1) {
+          setIsQrExpired(true);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [paymentMethod, upiProvider, razorpayQr?.qrId, razorpayPaid, isQrExpired]);
+
+  // Polling Razorpay QR status every 2.5s for automatic verification
+  useEffect(() => {
+    if (
+      paymentMethod !== 'UPI' ||
+      upiProvider !== 'RAZORPAY' ||
+      !razorpayQr?.qrId ||
+      razorpayPaid ||
+      isQrExpired ||
+      loading
+    ) {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await paymentService.getRazorpayQrStatus(razorpayQr.qrId);
+        if (res.isPaid || res.status === 'PAID') {
+          setRazorpayPaid(true);
+          clearInterval(interval);
+          // Auto-complete sale
+          executeSaleCompletion('UPI');
+        }
+      } catch {
+        // Ignore transient network errors during background polling
+      }
+    }, 2500);
+
+    return () => clearInterval(interval);
+  }, [paymentMethod, upiProvider, razorpayQr?.qrId, razorpayPaid, isQrExpired, loading]);
+
+  const handleApplyCoupon = async (codeOverride?: string) => {
+    const code = (codeOverride || couponInput).trim().toUpperCase();
+    if (!code) return;
+    setCouponError('');
+    setCouponBusy(true);
+    try {
+      const data = await posMobileService.validateCoupon({
+        code,
+        items: cartItems,
+      });
+      setCouponApplied({ code: data.code, discountAmount: data.discountAmount });
+      setCouponInput('');
+    } catch (err) {
+      setCouponApplied(null);
+      setCouponError(getApiErrorMessage(err, 'Coupon could not be applied.'));
+    } finally {
+      setCouponBusy(false);
+    }
+  };
+
+  const executeSaleCompletion = async (methodOverride?: typeof paymentMethod) => {
+    const chosenMethod = methodOverride || paymentMethod;
+    if (shiftRequired) {
+      Alert.alert('Shift Required', 'Open a shift before billing so cash sales can be reconciled at close.');
+      return;
+    }
+    try {
+      setLoading(true);
+      const res = await posMobileService.completeSale({
+        items: cartItems,
+        paymentMethod: chosenMethod,
+        amountPaid: grandTotal,
+        customer,
+        terminalId,
+        couponCode: couponApplied?.code,
+        notes: remarks.trim() || undefined,
+      });
+
+      router.push({
+        pathname: '/sale-success',
+        params: {
+          orderNumber: res.order.orderNumber,
+          grandTotal: res.order.grandTotal.toString(),
+          completedOn: 'Shopora Mobile App',
+          cartJson: JSON.stringify(cartItems),
+          customerJson: JSON.stringify(customer),
+          paymentMethod: chosenMethod,
+        },
+      });
+    } catch (err: unknown) {
+      if (isNetworkFailure(err)) {
+        const sale = await offlineSync.queueSale(
+          { items: cartItems, paymentMethod: chosenMethod, amountPaid: grandTotal, customer, terminalId, couponCode: couponApplied?.code, notes: remarks.trim() || undefined },
+          { items: cartItems, customer, paymentMethod: chosenMethod, grandTotal },
+        );
+
+        router.push({
+          pathname: '/sale-success',
+          params: {
+            orderNumber: sale.clientOrderNumber,
+            grandTotal: sale.receipt.grandTotal.toString(),
+            completedOn: 'Shopora Mobile App (Offline)',
+            cartJson: JSON.stringify(cartItems),
+            customerJson: JSON.stringify(customer),
+            paymentMethod: chosenMethod,
+          },
+        });
+      } else {
+        Alert.alert('Sale failed', getApiErrorMessage(err, 'Failed to complete sale.'));
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCompleteSale = () => executeSaleCompletion();
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, paddingBottom: 36 }} showsVerticalScrollIndicator={false}>
+      <ConnectivityBadge
+        isBackendReachable={offlineSync.isBackendReachable}
+        pendingCount={offlineSync.pendingCount}
+        needsReviewCount={offlineSync.needsReviewCount}
+        isSyncing={offlineSync.isSyncing}
+      />
+
+      <Text style={styles.sectionTitle}>Select Payment Method</Text>
+
+      <View style={styles.methodsGrid}>
+        {/* UPI / QR */}
+        <TouchableOpacity
+          style={[styles.methodCard, paymentMethod === 'UPI' && styles.methodCardActive]}
+          onPress={() => setPaymentMethod('UPI')}
+          activeOpacity={0.85}
+        >
+          <QrCode size={26} color={paymentMethod === 'UPI' ? '#ffffff' : '#0284c7'} />
+          <Text style={[styles.methodText, paymentMethod === 'UPI' && styles.methodTextActive]}>
+            UPI / QR
+          </Text>
+        </TouchableOpacity>
+
+        {/* Cash */}
+        <TouchableOpacity
+          style={[styles.methodCard, paymentMethod === 'CASH' && styles.methodCardActive]}
+          onPress={() => setPaymentMethod('CASH')}
+          activeOpacity={0.85}
+        >
+          <Banknote size={26} color={paymentMethod === 'CASH' ? '#ffffff' : '#0284c7'} />
+          <Text style={[styles.methodText, paymentMethod === 'CASH' && styles.methodTextActive]}>
+            Cash
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Dynamic UPI QR Code Card */}
+      {paymentMethod === 'UPI' && (
+        <View style={styles.upiCard}>
+          {/* UPI Provider Selector */}
+          <View style={styles.providerTabContainer}>
+            <TouchableOpacity
+              style={[
+                styles.providerTab,
+                upiProvider === 'RAZORPAY' && styles.providerTabActive,
+              ]}
+              onPress={() => setUpiProvider('RAZORPAY')}
+              activeOpacity={0.8}
+            >
+              <Sparkles
+                size={14}
+                color={upiProvider === 'RAZORPAY' ? '#ffffff' : '#0284c7'}
+                style={{ marginRight: 4 }}
+              />
+              <Text
+                style={[
+                  styles.providerTabText,
+                  upiProvider === 'RAZORPAY' && styles.providerTabTextActive,
+                ]}
+              >
+                Razorpay QR (Auto)
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.providerTab,
+                upiProvider === 'DIRECT_NPCI' && styles.providerTabActive,
+              ]}
+              onPress={() => setUpiProvider('DIRECT_NPCI')}
+              activeOpacity={0.8}
+            >
+              <QrCode
+                size={14}
+                color={upiProvider === 'DIRECT_NPCI' ? '#ffffff' : '#0284c7'}
+                style={{ marginRight: 4 }}
+              />
+              <Text
+                style={[
+                  styles.providerTabText,
+                  upiProvider === 'DIRECT_NPCI' && styles.providerTabTextActive,
+                ]}
+              >
+                Direct NPCI (0% Fee)
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* RAZORPAY MODE */}
+          {upiProvider === 'RAZORPAY' && (
+            <View>
+              <View style={styles.upiHeaderRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <QrCode size={18} color="#0284c7" style={{ marginRight: 6 }} />
+                  <Text style={styles.upiCardTitle}>Razorpay Dynamic QR</Text>
+                </View>
+                <View style={[styles.liveBadge, { backgroundColor: '#e0f2fe' }]}>
+                  <Text style={[styles.liveBadgeText, { color: '#0369a1' }]}>
+                    AUTO-VERIFY
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={styles.upiSub}>
+                Customer scans with any UPI app. Payment auto-completes the sale and prints receipt!
+              </Text>
+
+              {razorpayLoading ? (
+                <View style={[styles.qrContainer, { height: 210, justifyContent: 'center' }]}>
+                  <ActivityIndicator size="large" color="#0284c7" />
+                  <Text style={{ marginTop: 12, color: '#64748b', fontSize: 13 }}>
+                    Generating Razorpay Dynamic QR...
+                  </Text>
+                </View>
+              ) : razorpayError ? (
+                <View style={[styles.qrContainer, { padding: 16 }]}>
+                  <Text style={{ color: '#dc2626', fontSize: 13, textAlign: 'center', marginBottom: 12 }}>
+                    {razorpayError}
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 8 }}>
+                    <TouchableOpacity
+                      style={[styles.vpaSaveBtn, { backgroundColor: '#0284c7', paddingHorizontal: 16 }]}
+                      onPress={fetchRazorpayQr}
+                    >
+                      <Text style={styles.vpaSaveBtnText}>Retry</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.vpaSaveBtn, { backgroundColor: '#64748b', paddingHorizontal: 16 }]}
+                      onPress={() => setUpiProvider('DIRECT_NPCI')}
+                    >
+                      <Text style={styles.vpaSaveBtnText}>Use Direct NPCI</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : razorpayPaid ? (
+                <View style={[styles.qrContainer, { height: 210, justifyContent: 'center', backgroundColor: '#f0fdf4' }]}>
+                  <CheckCircle2 size={48} color="#16a34a" />
+                  <Text style={{ marginTop: 8, color: '#16a34a', fontWeight: 'bold', fontSize: 16 }}>
+                    Payment Received!
+                  </Text>
+                  <Text style={{ color: '#15803d', fontSize: 13 }}>
+                    Completing sale and generating receipt...
+                  </Text>
+                </View>
+              ) : isQrExpired ? (
+                <View style={[styles.qrContainer, { width: 250, height: 310, justifyContent: 'center', padding: 16, backgroundColor: '#fef2f2' }]}>
+                  <AlertCircle size={44} color="#dc2626" />
+                  <Text style={{ marginTop: 8, color: '#991b1b', fontWeight: 'bold', fontSize: 16, textAlign: 'center' }}>
+                    QR Expired (2 Min Limit)
+                  </Text>
+                  <Text style={{ color: '#b91c1c', fontSize: 12, textAlign: 'center', marginTop: 4, marginBottom: 14 }}>
+                    For security, dynamic UPI QR expires after 2 minutes.
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.vpaSaveBtn, { backgroundColor: '#0284c7', paddingHorizontal: 16 }]}
+                    onPress={fetchRazorpayQr}
+                  >
+                    <Text style={styles.vpaSaveBtnText}>🔄 Generate New QR</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : razorpayQr?.imageUrl ? (
+                <View>
+                  <View style={[styles.qrContainer, { width: 300, height: 380, padding: 8, alignSelf: 'center' }]}>
+                    <Image
+                      source={{ uri: razorpayQr.imageUrl }}
+                      style={{ width: 284, height: 364 }}
+                      resizeMode="contain"
+                    />
+                  </View>
+
+                  {/* 2-Minute Countdown Timer Badge */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 8 }}>
+                    <View
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: razorpaySecondsLeft <= 30 ? '#fee2e2' : '#e0f2fe',
+                        paddingHorizontal: 12,
+                        paddingVertical: 5,
+                        borderRadius: 20,
+                        borderWidth: 1,
+                        borderColor: razorpaySecondsLeft <= 30 ? '#fca5a5' : '#bae6fd',
+                      }}
+                    >
+                      <Clock size={13} color={razorpaySecondsLeft <= 30 ? '#dc2626' : '#0284c7'} style={{ marginRight: 6 }} />
+                      <Text
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 'bold',
+                          color: razorpaySecondsLeft <= 30 ? '#dc2626' : '#0369a1',
+                        }}
+                      >
+                        Expires in {Math.floor(razorpaySecondsLeft / 60)}:{(razorpaySecondsLeft % 60).toString().padStart(2, '0')}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.autoVerifyPill}>
+                    <RefreshCw size={14} color="#0284c7" style={{ marginRight: 6 }} />
+                    <Text style={styles.autoVerifyText}>
+                      Auto-Verifying: Listening for customer payment...
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <View style={[styles.qrContainer, { width: 280, height: 270, justifyContent: 'center', padding: 18, backgroundColor: '#f0f9ff', borderColor: '#bae6fd', alignSelf: 'center' }]}>
+                  <Sparkles size={40} color="#0284c7" style={{ alignSelf: 'center', marginBottom: 10 }} />
+                  <Text style={{ color: '#0369a1', fontSize: 15, fontWeight: '800', textAlign: 'center', marginBottom: 6 }}>
+                    Razorpay Dynamic QR
+                  </Text>
+                  <Text style={{ color: '#64748b', fontSize: 11, textAlign: 'center', marginBottom: 18, lineHeight: 16 }}>
+                    Tap below to generate a live dynamic QR locked to ₹{effectiveTotal.toFixed(2)} with 2-minute timer & auto-verification.
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.vpaSaveBtn, { backgroundColor: '#0284c7', paddingHorizontal: 16, paddingVertical: 12, width: '100%', alignItems: 'center' }]}
+                    onPress={fetchRazorpayQr}
+                  >
+                    <Text style={[styles.vpaSaveBtnText, { fontSize: 13, fontWeight: 'bold' }]}>⚡ Generate Dynamic QR</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              <View style={styles.upiAmountBox}>
+                <Text style={styles.upiAmountLabel}>Amount to Pay</Text>
+                <Text style={styles.upiAmountValue}>₹{effectiveTotal.toFixed(2)}</Text>
+              </View>
+
+              <View style={styles.upiAppsBadgeRow}>
+                <Text style={styles.upiAppsBadgeText}>
+                  Deposits directly to your Razorpay Merchant Account
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {/* DIRECT NPCI MODE */}
+          {upiProvider === 'DIRECT_NPCI' && (
+            <View>
+              <View style={styles.upiHeaderRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <QrCode size={18} color="#0284c7" style={{ marginRight: 6 }} />
+                  <Text style={styles.upiCardTitle}>Direct NPCI UPI QR</Text>
+                </View>
+                <View style={styles.liveBadge}>
+                  <Text style={styles.liveBadgeText}>0% GATEWAY FEE</Text>
+                </View>
+              </View>
+
+              <Text style={styles.upiSub}>
+                Scan with Google Pay, PhonePe, Paytm, BHIM, Cred, or any banking app.
+              </Text>
+
+              <View style={[styles.qrContainer, { width: 280, height: 280, justifyContent: 'center', alignItems: 'center', alignSelf: 'center' }]}>
+                <UpiQrView value={currentUpiUri} size={240} />
+              </View>
+
+              <View style={styles.upiAmountBox}>
+                <Text style={styles.upiAmountLabel}>Amount to Pay</Text>
+                <Text style={styles.upiAmountValue}>₹{effectiveTotal.toFixed(2)}</Text>
+              </View>
+
+              <View style={styles.upiVpaRow}>
+                <Text style={styles.upiVpaLabel}>Store VPA: </Text>
+                {editingVpa ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                    <TextInput
+                      style={styles.vpaInput}
+                      value={tempVpa}
+                      onChangeText={setTempVpa}
+                      autoCapitalize="none"
+                      placeholder="e.g. yourstore@okhdfcbank"
+                    />
+                    <TouchableOpacity
+                      style={styles.vpaSaveBtn}
+                      onPress={async () => {
+                        const clean = tempVpa.trim() || 'vasanthisignature@okhdfcbank';
+                        setStoreVpa(clean);
+                        setEditingVpa(false);
+                        await SecureStore.setItemAsync(STORE_VPA_KEY, clean).catch(() => {});
+                      }}
+                    >
+                      <Text style={styles.vpaSaveBtnText}>Save</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, justifyContent: 'space-between' }}>
+                    <Text style={styles.upiVpaText} numberOfLines={1}>{storeVpa}</Text>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setTempVpa(storeVpa);
+                        setEditingVpa(true);
+                      }}
+                      style={styles.vpaEditBtn}
+                    >
+                      <Text style={styles.upiVpaEdit}>Edit UPI</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.upiAppsBadgeRow}>
+                <Text style={styles.upiAppsBadgeText}>
+                  Direct Bank Transfer • Zero Intermediary Fees
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* Coupon */}
+      {couponApplied ? (
+        <View style={styles.couponChip}>
+          <Text style={styles.couponChipCode}>Coupon {couponApplied.code}</Text>
+          <Text style={styles.couponChipAmount}>-₹{couponApplied.discountAmount.toFixed(2)}</Text>
+          <TouchableOpacity onPress={() => setCouponApplied(null)}>
+            <Text style={styles.couponChipRemove}>REMOVE</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={{ marginBottom: 8 }}>
+          <View style={styles.couponRow}>
+            <TextInput
+              style={styles.couponInput}
+              value={couponInput}
+              onChangeText={(t) => setCouponInput(t.toUpperCase())}
+              placeholder="Enter coupon code (e.g. WELCOME10)"
+              placeholderTextColor="#a3a3a3"
+              autoCapitalize="characters"
+            />
+            <TouchableOpacity
+              onPress={() => handleApplyCoupon()}
+              disabled={couponBusy || !couponInput.trim()}
+              style={[styles.couponBtn, (couponBusy || !couponInput.trim()) && { opacity: 0.5 }]}
+            >
+              <Text style={styles.couponBtnText}>{couponBusy ? '...' : 'Apply'}</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Live Auto-Suggest Coupon Chips */}
+          {suggestedCoupons.length > 0 && (
+            <View style={styles.couponSuggestionsContainer}>
+              <Text style={styles.couponSuggestionsHeader}>AVAILABLE OFFERS (TAP TO APPLY):</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 4 }}>
+                {suggestedCoupons.map((c) => (
+                  <TouchableOpacity
+                    key={c.code}
+                    style={styles.couponSuggestionChip}
+                    onPress={() => {
+                      setCouponInput(c.code);
+                      handleApplyCoupon(c.code);
+                    }}
+                    disabled={couponBusy}
+                  >
+                    <Tag size={12} color="#0284c7" style={{ marginRight: 4 }} />
+                    <Text style={styles.couponSuggestionCode}>{c.code}</Text>
+                    <View style={styles.couponSuggestionBadge}>
+                      <Text style={styles.couponSuggestionBadgeText}>{c.discountText}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+        </View>
+      )}
+      {!!couponError && <Text style={styles.shiftErrorText}>{couponError}</Text>}
+
+      {/* Remarks / Order Notes (Optional) */}
+      <View style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: 14, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 12 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+          <FileText size={14} color="#64748b" style={{ marginRight: 6 }} />
+          <Text style={{ fontSize: 11, fontWeight: '800', color: '#475569', letterSpacing: 0.5 }}>
+            REMARKS / ORDER NOTES (OPTIONAL)
+          </Text>
+        </View>
+        <TextInput
+          style={{ backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#cbd5e1', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, color: '#1e293b' }}
+          placeholder="e.g. Handed to Staff X, customer special request, etc."
+          placeholderTextColor="#94a3b8"
+          value={remarks}
+          onChangeText={setRemarks}
+          maxLength={200}
+        />
+      </View>
+
+      {/* Summary Box */}
+      <View style={styles.summaryBox}>
+        <Text style={styles.summaryLabel}>Total Amount Due</Text>
+        <Text style={styles.summaryValue}>
+          ₹{Math.max(0, grandTotal - (couponApplied?.discountAmount || 0))}
+        </Text>
+        {couponApplied && (
+          <Text style={styles.summaryStrike}>₹{grandTotal}</Text>
+        )}
+      </View>
+
+      {shiftRequired && (
+        <View style={styles.shiftGate}>
+          <View style={styles.shiftGateHeader}>
+            <Clock size={16} color="#b45309" />
+            <Text style={styles.shiftGateText}>
+              No shift is open on this terminal. Open one with a starting cash float before billing.
+            </Text>
+          </View>
+          <View style={styles.shiftGateRow}>
+            <TextInput
+              style={styles.shiftInput}
+              keyboardType="numeric"
+              value={openingCashInput}
+              onChangeText={setOpeningCashInput}
+              placeholder="Opening cash (₹)"
+              placeholderTextColor="#a16207"
+            />
+            <TouchableOpacity
+              style={[styles.shiftOpenBtn, (!openingCashInput || openingShift) && styles.shiftOpenBtnDisabled]}
+              onPress={handleOpenShift}
+              disabled={!openingCashInput || openingShift}
+            >
+              {openingShift ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Text style={styles.shiftOpenBtnText}>Open Shift</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          {shiftError !== '' && <Text style={styles.shiftErrorText}>{shiftError}</Text>}
+        </View>
+      )}
+
+      <TouchableOpacity
+        style={[
+          styles.payBtn,
+          razorpayPaid && { backgroundColor: '#16a34a' },
+          !offlineSync.isBackendReachable && styles.payBtnOffline,
+          shiftRequired && styles.payBtnDisabled,
+        ]}
+        onPress={() => {
+          if (paymentMethod === 'UPI' && upiProvider === 'RAZORPAY' && !razorpayQr && !razorpayPaid) {
+            fetchRazorpayQr();
+          } else {
+            handleCompleteSale();
+          }
+        }}
+        disabled={loading || shiftRequired}
+        activeOpacity={0.85}
+      >
+        {loading ? (
+          <ActivityIndicator size="small" color="#ffffff" />
+        ) : razorpayPaid ? (
+          <>
+            <CheckCircle2 size={20} color="#ffffff" style={{ marginRight: 8 }} />
+            <Text style={styles.payBtnText}>✓ PAYMENT RECEIVED — COMPLETE SALE</Text>
+          </>
+        ) : paymentMethod === 'UPI' && upiProvider === 'RAZORPAY' && !razorpayQr ? (
+          <>
+            <Sparkles size={20} color="#ffffff" style={{ marginRight: 8 }} />
+            <Text style={styles.payBtnText}>⚡ GENERATE DYNAMIC QR (₹{effectiveTotal.toFixed(2)})</Text>
+          </>
+        ) : (
+          <>
+            <Check size={20} color="#ffffff" style={{ marginRight: 8 }} />
+            <Text style={styles.payBtnText}>
+              {offlineSync.isBackendReachable ? 'VERIFY & COMPLETE SALE' : 'SAVE OFFLINE & CONTINUE'}
+            </Text>
+          </>
+        )}
+      </TouchableOpacity>
+      {!offlineSync.isBackendReachable && (
+        <Text style={styles.offlineNote}>
+          Backend unreachable — this sale will be queued on this device and synced automatically once
+          the connection returns.
+        </Text>
+      )}
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  couponRow: { flexDirection: 'row', gap: 8, marginBottom: 6 },
+  couponInput: { flex: 1, borderWidth: 1, borderColor: '#e5e5e5', backgroundColor: '#fafafa', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, fontFamily: 'monospace', fontWeight: '700', fontSize: 13, color: '#171717' },
+  couponBtn: { backgroundColor: '#171717', borderRadius: 10, paddingHorizontal: 16, justifyContent: 'center' },
+  couponBtnText: { color: '#ffffff', fontWeight: '700', fontSize: 12 },
+  couponChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#ecfdf5', borderColor: '#a7f3d0', borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 8 },
+  couponChipCode: { flex: 1, fontWeight: '800', color: '#065f46', fontSize: 12 },
+  couponChipAmount: { fontWeight: '800', color: '#065f46', marginRight: 12 },
+  couponChipRemove: { fontWeight: '800', color: '#059669', fontSize: 10 },
+  couponSuggestionsContainer: { marginTop: 4, marginBottom: 8 },
+  couponSuggestionsHeader: { fontSize: 10, fontWeight: '800', color: '#64748b', letterSpacing: 0.5, marginBottom: 4 },
+  couponSuggestionChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f0fdf4', borderColor: '#bbf7d0', borderWidth: 1, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 6 },
+  couponSuggestionCode: { fontSize: 12, fontWeight: '800', color: '#15803d', marginRight: 6 },
+  couponSuggestionBadge: { backgroundColor: '#dcfce7', borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2 },
+  couponSuggestionBadgeText: { fontSize: 10, fontWeight: '800', color: '#166534' },
+  summaryStrike: { color: '#a3a3a3', textDecorationLine: 'line-through', fontSize: 12, marginTop: 2 },
+  container: {
+    flex: 1,
+    backgroundColor: '#f0f9ff',
+  },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#0369a1',
+    textTransform: 'uppercase',
+    marginBottom: 14,
+  },
+  methodsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  methodCard: {
+    width: '48%',
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e0f2fe',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  methodCardActive: {
+    backgroundColor: '#0284c7',
+    borderColor: '#0284c7',
+  },
+  methodText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#0f172a',
+    marginTop: 8,
+  },
+  methodTextActive: {
+    color: '#ffffff',
+  },
+  upiCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+    marginBottom: 20,
+    alignItems: 'center',
+    shadowColor: '#0284c7',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  providerTabContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#f1f5f9',
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 14,
+    width: '100%',
+  },
+  providerTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 7,
+    borderRadius: 8,
+  },
+  providerTabActive: {
+    backgroundColor: '#0284c7',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  providerTabText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  providerTabTextActive: {
+    color: '#ffffff',
+  },
+  autoVerifyPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#e0f2fe',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginBottom: 12,
+  },
+  autoVerifyText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#0369a1',
+  },
+  upiHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 6,
+  },
+  upiCardTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#0369a1',
+  },
+  liveBadge: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#a7f3d0',
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  liveBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#059669',
+    letterSpacing: 0.5,
+  },
+  upiSub: {
+    fontSize: 11,
+    color: '#64748b',
+    textAlign: 'center',
+    marginBottom: 14,
+  },
+  qrContainer: {
+    backgroundColor: '#ffffff',
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 230,
+    height: 230,
+    marginBottom: 12,
+  },
+  qrImage: {
+    width: 190,
+    height: 190,
+  },
+  qrLoaderBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  qrLoaderText: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 8,
+    fontWeight: '600',
+  },
+  refreshQrBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  refreshQrText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#0284c7',
+  },
+  upiAmountBox: {
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  upiAmountLabel: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  upiAmountValue: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#0284c7',
+    marginTop: 2,
+  },
+  upiVpaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 10,
+  },
+  upiVpaLabel: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#64748b',
+  },
+  upiVpaText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0f172a',
+    flex: 1,
+  },
+  vpaEditBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: '#e0f2fe',
+    borderRadius: 4,
+  },
+  upiVpaEdit: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#0369a1',
+  },
+  vpaInput: {
+    flex: 1,
+    fontSize: 11,
+    color: '#0f172a',
+    padding: 2,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#0284c7',
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  vpaSaveBtn: {
+    backgroundColor: '#0284c7',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  vpaSaveBtnText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#ffffff',
+  },
+  upiAppsBadgeRow: {
+    paddingTop: 4,
+  },
+  upiAppsBadgeText: {
+    fontSize: 9,
+    color: '#94a3b8',
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  summaryBox: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  summaryLabel: {
+    fontSize: 11,
+    color: '#0369a1',
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+  },
+  summaryValue: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#0284c7',
+    marginTop: 4,
+  },
+  payBtn: {
+    backgroundColor: '#0284c7',
+    borderRadius: 16,
+    paddingVertical: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  payBtnText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#ffffff',
+  },
+  payBtnOffline: {
+    backgroundColor: '#b45309',
+  },
+  payBtnDisabled: {
+    opacity: 0.5,
+  },
+  shiftGate: {
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 16,
+  },
+  shiftGateHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 10,
+  },
+  shiftGateText: {
+    flex: 1,
+    marginLeft: 8,
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400e',
+  },
+  shiftGateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  shiftInput: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#fcd34d',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginRight: 8,
+  },
+  shiftOpenBtn: {
+    backgroundColor: '#b45309',
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  shiftOpenBtnDisabled: {
+    opacity: 0.5,
+  },
+  shiftOpenBtnText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#ffffff',
+  },
+  shiftErrorText: {
+    fontSize: 10,
+    color: '#b91c1c',
+    fontWeight: '600',
+    marginTop: 8,
+  },
+  offlineNote: {
+    fontSize: 10,
+    color: '#b45309',
+    textAlign: 'center',
+    marginTop: 8,
+    fontWeight: '600',
+  },
+});
