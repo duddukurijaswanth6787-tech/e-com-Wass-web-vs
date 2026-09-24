@@ -5,9 +5,9 @@ export async function GET() {
     success: true,
     statusCode: 200,
     data: {
-      paymentMethods: {},
-      totalPaid: 0,
-      settledAmount: 0,
+      byMethod: [],
+      totalRefunds: 0,
+      failedPayments: 0,
     },
   });
 }

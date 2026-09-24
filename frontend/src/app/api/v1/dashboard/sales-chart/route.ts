@@ -5,9 +5,8 @@ export async function GET() {
     success: true,
     statusCode: 200,
     data: {
-      chartData: [],
-      period: 'monthly',
-      totalRevenue: 0,
+      labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+      data: [0, 0, 0, 0, 0, 0, 0],
     },
   });
 }

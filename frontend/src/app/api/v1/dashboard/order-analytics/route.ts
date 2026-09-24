@@ -5,9 +5,7 @@ export async function GET() {
     success: true,
     statusCode: 200,
     data: {
-      statusBreakdown: {},
-      totalOrders: 0,
-      fulfillmentRate: 100,
+      statusBreakdown: [],
     },
   });
 }

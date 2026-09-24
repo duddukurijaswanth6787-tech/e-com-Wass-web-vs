@@ -5,7 +5,10 @@ export async function GET() {
     success: true,
     statusCode: 200,
     data: {
-      activities: [],
+      orders: [],
+      products: [],
+      customers: [],
+      reviews: [],
     },
   });
 }
