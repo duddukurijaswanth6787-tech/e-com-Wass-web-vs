@@ -123,10 +123,10 @@ export default async function RootLayout({
           {`
             if (typeof window !== "undefined" && window.BoutiqueSDK) {
               window.boutique = new window.BoutiqueSDK({
-                clientId: process.env.NEXT_PUBLIC_SAAS_CLIENT_ID || "cl_hyd_vasanticreat_3ab4d8",
-                publicKey: process.env.NEXT_PUBLIC_SAAS_PUBLIC_KEY || "pk_live_52996adda36429e6aa48d824dbdf44ca",
-                secretKey: process.env.NEXT_PUBLIC_SAAS_SECRET_KEY || ("sk_live_" + "c6328a1f8448453dcb9aaed6fc02d45ac5fed30ddce09c5d"),
-                apiUrl: process.env.NEXT_PUBLIC_SAAS_API_URL || "http://localhost:5000",
+                clientId: "cl_hyd_vasanticreat_3ab4d8",
+                publicKey: "pk_live_52996adda36429e6aa48d824dbdf44ca",
+                secretKey: "sk_live_" + "c6328a1f8448453dcb9aaed6fc02d45ac5fed30ddce09c5d",
+                apiUrl: "http://localhost:5000",
                 whatsappNumber: "919876543210",
                 debug: true
               });

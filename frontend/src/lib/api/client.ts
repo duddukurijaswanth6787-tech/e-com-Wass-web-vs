@@ -10,8 +10,9 @@ export const getApiBaseUrl = () => {
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
       return 'http://localhost:4000/api/v1';
     }
+    return 'https://api.vasanthissignature.in/api/v1';
   }
-  return '/api/v1';
+  return 'https://api.vasanthissignature.in/api/v1';
 };
 
 export const apiClient = axios.create({
