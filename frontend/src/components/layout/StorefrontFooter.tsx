@@ -31,20 +31,20 @@ export function StorefrontFooter() {
   return (
     <footer className="w-full font-sans">
       {/* Main Footer Content */}
-          <div className="space-y-2">
-            <h3 className="text-base sm:text-lg font-bold font-serif text-[var(--footer-heading)] tracking-wide">
-              VSWAAS
-            </h3>
-            <p className="text-xs text-[color-mix(in_oklab,var(--footer-text)_80%,transparent)] max-w-sm leading-relaxed">
-              Curated designer ethnic wear, handlooms, and contemporary haute couture fashion.
-            </p>
-          </div>
-              <Image src="/brand/logo-full.png" alt="Vasanthi's Signature" width={1400} height={803} className="h-16 sm:h-20 w-auto object-contain" />
-              <p className="text-[11px] text-[color-mix(in_oklab,var(--footer-text)_70%,transparent)] hidden sm:block mt-1.5">
-                Pioneering haute couture lehengas, kurtis, and luxury fashion since 2018.
-              </p>
+      <div className="bg-[var(--footer-bg)] text-[var(--footer-text)] pt-8 sm:pt-12 pb-6 sm:pb-8 border-t border-[var(--footer-border)]">
+        <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 sm:gap-8 pb-8 sm:pb-12 border-b border-[color-mix(in_oklab,var(--footer-text)_10%,transparent)]">
+            {/* Column 1: Brand Info */}
+            <div className="space-y-3 sm:col-span-2 lg:col-span-2">
+              <div className="space-y-1">
+                <h3 className="text-base sm:text-lg font-bold font-serif text-[var(--footer-heading)] tracking-wide">
+                  VSWAAS
+                </h3>
+                <p className="text-xs text-[color-mix(in_oklab,var(--footer-text)_80%,transparent)] max-w-sm leading-relaxed">
+                  Curated designer ethnic wear, handlooms, and contemporary haute couture fashion.
+                </p>
+              </div>
             </div>
-
             {/* Social Icons */}
             {socialLinks && socialLinks.length > 0 && (
               <div className="flex items-center gap-2 text-[var(--footer-text)]">
