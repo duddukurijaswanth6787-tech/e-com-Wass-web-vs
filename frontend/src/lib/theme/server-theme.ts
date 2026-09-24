@@ -28,10 +28,10 @@ export function buildThemeCss(colors: Record<string, string>): string {
 }
 
 export async function fetchThemeCss(): Promise<string> {
+  const baseUrl = getApiBaseUrl();
+  if (!baseUrl || !baseUrl.startsWith('http')) return '';
   try {
-    const res = await fetch(`${getApiBaseUrl()}/storefront/theme`, {
-      // Colours change rarely and every page needs them; a short revalidate
-      // keeps this off the critical path without going stale for long.
+    const res = await fetch(`${baseUrl}/storefront/theme`, {
       next: { revalidate: 60 },
     });
     if (!res.ok) return '';
@@ -40,9 +40,6 @@ export async function fetchThemeCss(): Promise<string> {
     if (!colors || typeof colors !== 'object') return '';
     return buildThemeCss(colors as Record<string, string>);
   } catch {
-    // The storefront must render even when the API is unreachable. Without
-    // an override the defaults in globals.css apply, which is the palette
-    // the site shipped with.
     return '';
   }
 }
