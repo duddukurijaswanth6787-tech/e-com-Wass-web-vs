@@ -10,12 +10,12 @@ function getBackendOrigin(): string {
   }
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname;
-    if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
-      return 'https://api.vasanthissignature.in';
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'http://localhost:4000';
     }
-    return 'http://localhost:4000';
+    return '';
   }
-  return 'https://api.vasanthissignature.in';
+  return '';
 }
 
 export function resolveMediaUrl(url?: string | null): string {
