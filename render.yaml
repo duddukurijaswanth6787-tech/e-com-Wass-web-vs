@@ -6,7 +6,7 @@ services:
     plan: free
     rootDir: backend
     buildCommand: npm install && npx prisma generate && npx nest build && npx tsc-alias
-    startCommand: node dist/src/main.js
+    startCommand: npx prisma db push --accept-data-loss && node dist/src/main.js
     envVars:
       - key: NODE_ENV
         value: production
