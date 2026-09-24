@@ -27,41 +27,25 @@ const geistMono = Geist_Mono({
 export const siteOpenGraph = {
   type: "website" as const,
   locale: "en_IN",
-  siteName: "Vasanthi's Signature",
-  title: "Vasanthi's Signature | Women's Ethnic Wear & Designer Fashion",
-  description: "Official Online Store for Vasanthi's Signature - Premium women's ethnic wear, designer fashion, and handcrafted collections.",
+  siteName: "VSWAAS Boutique",
+  title: "VSWAAS | Premium Boutique & Designer Fashion",
+  description: "Official Online Store for VSWAAS Boutique - Premium women's ethnic wear, designer fashion, and handcrafted collections.",
   images: ["/brand/logo-full.png"],
 };
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://vasanthissignature.in"),
   title: {
-    default: "Vasanthi's Signature | Women's Ethnic Wear & Designer Fashion",
-    template: "%s | Vasanthi's Signature",
+    default: "VSWAAS | Premium Boutique & Designer Fashion",
+    template: "%s | VSWAAS",
   },
-  description: "Official Online Store for Vasanthi's Signature - Premium women's ethnic wear, designer fashion, and handcrafted collections.",
-  keywords: [
-    "Vasanthi's Signature",
-    "vasanthissignature",
-    "vasanthi signature",
-    "vasanthissignature.in",
-    "Women's Ethnic Wear",
-    "Designer Fashion",
-    "Indian Designer Clothing",
-    "Ethnic Fashion",
-    "Women's Fashion",
-  ],
-  alternates: {
-    canonical: "https://vasanthissignature.in",
-  },
+  description: "Official Online Store for VSWAAS Boutique - Premium ethnic wear, designer fashion, and handcrafted collections.",
   openGraph: {
     ...siteOpenGraph,
-    url: "https://vasanthissignature.in",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Vasanthi's Signature | Luxury Ethnic Wear & Designer Outfits",
-    description: "Official Online Store for Vasanthi's Signature - Premium Ethnic & Designer Wear",
+    title: "VSWAAS | Luxury Ethnic Wear & Designer Outfits",
+    description: "Official Online Store for VSWAAS Boutique",
     images: ["/brand/logo-full.png"],
   },
   robots: {

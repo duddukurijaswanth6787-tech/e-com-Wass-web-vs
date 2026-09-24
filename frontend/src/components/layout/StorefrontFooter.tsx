@@ -31,13 +31,14 @@ export function StorefrontFooter() {
   return (
     <footer className="w-full font-sans">
       {/* Main Footer Content */}
-
-      {/* 2. Main Footer Content (Tight Vertical Spacing on Mobile) */}
-      <div className="bg-[color-mix(in_oklab,var(--footer-bg)_62%,black)] text-sky-100/90 pt-5 sm:pt-12 pb-20 lg:pb-10 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-[1440px] mx-auto space-y-4">
-          {/* Top Row: Brand & Social Icons */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
-            <div>
+          <div className="space-y-2">
+            <h3 className="text-base sm:text-lg font-bold font-serif text-[var(--footer-heading)] tracking-wide">
+              VSWAAS
+            </h3>
+            <p className="text-xs text-[color-mix(in_oklab,var(--footer-text)_80%,transparent)] max-w-sm leading-relaxed">
+              Curated designer ethnic wear, handlooms, and contemporary haute couture fashion.
+            </p>
+          </div>
               <Image src="/brand/logo-full.png" alt="Vasanthi's Signature" width={1400} height={803} className="h-16 sm:h-20 w-auto object-contain" />
               <p className="text-[11px] text-[color-mix(in_oklab,var(--footer-text)_70%,transparent)] hidden sm:block mt-1.5">
                 Pioneering haute couture lehengas, kurtis, and luxury fashion since 2018.
