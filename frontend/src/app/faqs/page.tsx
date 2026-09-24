@@ -6,7 +6,7 @@ const path = '/faqs';
 
 export const metadata: Metadata = {
   title: 'FAQs',
-  description: "Answers to common questions about orders, sizing, shipping, returns and payments at Vasanthi's Signature.",
+  description: 'Answers to common questions about orders, sizing, shipping, returns and payments at Vasanti Creations.',
   alternates: { canonical: path },
   openGraph: { ...siteOpenGraph, url: path },
 };

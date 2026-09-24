@@ -6,7 +6,7 @@ const path = '/cancellation-refund-policy';
 
 export const metadata: Metadata = {
   title: 'Cancellation & Refund Policy',
-  description: "How order cancellations, returns and refunds work at Vasanthi's Signature.",
+  description: 'How order cancellations, returns and refunds work at Vasanti Creations.',
   alternates: { canonical: path },
   openGraph: { ...siteOpenGraph, url: path },
 };

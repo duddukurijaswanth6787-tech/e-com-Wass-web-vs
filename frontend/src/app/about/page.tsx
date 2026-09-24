@@ -6,7 +6,7 @@ const path = '/about';
 
 export const metadata: Metadata = {
   title: 'About Us',
-  description: "The story behind Vasanthi's Signature — heritage weaving, zardosi embroidery and timeless bridal couture since 2018.",
+  description: 'The story behind Vasanti Creations — heritage weaving, zardosi embroidery and timeless bridal couture since 2018.',
   alternates: { canonical: path },
   openGraph: { ...siteOpenGraph, url: path },
 };

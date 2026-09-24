@@ -32,7 +32,7 @@ export default function PrivacyPolicyPage() {
             </div>
             <h1 className="text-2xl sm:text-4xl font-bold font-serif tracking-tight">Privacy Policy</h1>
             <p className="text-xs sm:text-sm text-sky-100/80 max-w-2xl leading-relaxed">
-              At <strong className="text-amber-300">Vasanthi&apos;s Signature</strong> (accessible from <a href="https://vasanthissignature.in" className="underline font-bold text-white">https://vasanthissignature.in</a>), protecting your personal information and transparent data management is our highest commitment.
+              At <strong className="text-amber-300">Vasanti Creations</strong> (accessible from <a href="https://vswaas-web.vercel.app" className="underline font-bold text-white">https://vswaas-web.vercel.app</a>), protecting your personal information and transparent data management is our highest commitment.
             </p>
             <div className="pt-2 text-[11px] text-sky-200/70 font-mono">
               Last Updated: August 9, 2026 • Compliant with Indian IT Act 2000 & GDPR Standards

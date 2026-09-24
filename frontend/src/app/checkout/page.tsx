@@ -456,7 +456,7 @@ function CheckoutPageContent() {
       amount: Math.round(payment.amount * 100),
       currency: payment.currency || 'INR',
       order_id: payment.providerOrderId,
-      name: "Vasanthi's Signature",
+      name: 'Vasanti Creations',
       description: `Order #${orderNumber}`,
       image: '/brand/logo-full.png',
       prefill: {

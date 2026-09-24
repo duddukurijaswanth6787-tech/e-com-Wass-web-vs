@@ -160,7 +160,7 @@ export default function PosDashboardPage() {
         .total { font-weight: bold; border-top: 2px solid #000; margin-top: 8px; padding-top: 6px; }
         hr { border: none; border-top: 1px dashed #000; }
       </style></head><body>
-        <h1>Vasanthi's Signature</h1>
+        <h1>Vasanti Creations</h1>
         <p style="text-align:center">${reportType === 'X_REPORT' ? 'X-REPORT (Mid-Shift)' : 'Z-REPORT (Final)'}</p>
         <hr/>
         <p>Terminal: ${shift.terminalId}</p>

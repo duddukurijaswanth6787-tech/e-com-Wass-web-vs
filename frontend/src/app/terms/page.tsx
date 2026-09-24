@@ -32,7 +32,7 @@ export default function TermsOfServicePage() {
             </div>
             <h1 className="text-2xl sm:text-4xl font-bold font-serif tracking-tight">Terms of Service</h1>
             <p className="text-xs sm:text-sm text-sky-100/80 max-w-2xl leading-relaxed">
-              Welcome to <strong className="text-amber-300">Vasanthi&apos;s Signature</strong> (<a href="https://vasanthissignature.in" className="underline font-bold text-white">https://vasanthissignature.in</a>). By accessing our website, making a purchase, or creating an account, you agree to comply with the following Terms & Conditions.
+              Welcome to <strong className="text-amber-300">Vasanti Creations</strong> (<a href="https://vswaas-web.vercel.app" className="underline font-bold text-white">https://vswaas-web.vercel.app</a>). By accessing our website, making a purchase, or creating an account, you agree to comply with the following Terms & Conditions.
             </p>
             <div className="pt-2 text-[11px] text-sky-200/70 font-mono">
               Effective Date: August 9, 2026 • Governed by the Laws of India

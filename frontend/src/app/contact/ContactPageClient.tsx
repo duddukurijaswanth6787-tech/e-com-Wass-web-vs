@@ -20,7 +20,7 @@ export default function ContactPage() {
   const contact = useContactSupport();
   const { data: settings } = usePublicSettings();
   const typedSettings = settings as Record<string, unknown> | undefined;
-  const storeName = (typedSettings?.storeName as string | undefined) || "Vasanthi's Signature";
+  const storeName = (typedSettings?.storeName as string | undefined) || 'Vasanti Creations';
   const supportEmail = typedSettings?.supportEmail as string | undefined;
   const supportPhone = typedSettings?.supportPhone as string | undefined;
   const whatsappNumber = typedSettings?.whatsappNumber as string | undefined;

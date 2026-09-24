@@ -6,7 +6,7 @@ const path = '/collections';
 
 export const metadata: Metadata = {
   title: 'Curated Collections',
-  description: "Browse curated collections of lehengas, gowns and designer ethnic wear from Vasanthi's Signature.",
+  description: 'Browse curated collections of lehengas, gowns and designer ethnic wear from Vasanti Creations.',
   alternates: { canonical: path },
   openGraph: { ...siteOpenGraph, url: path },
 };
