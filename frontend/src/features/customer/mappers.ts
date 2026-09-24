@@ -4,7 +4,7 @@ import { resolveMediaUrl } from '@/lib/media-url';
 
 // ponytail: local SVG placeholder instead of external placehold.co (saves 2-3s on slow connections)
 export const PLACEHOLDER_IMAGE =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='500' viewBox='0 0 400 500'%3E%3Crect fill='%23f8f4f2' width='400' height='500'/%3E%3Ctext x='50%25' y='50%25' font-family='sans-serif' font-size='24' fill='%23800020' text-anchor='middle' dominant-baseline='middle'%3EVasanthi%3C/text%3E%3C/svg%3E";
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='500' viewBox='0 0 400 500'%3E%3Crect fill='%23f8f4f2' width='400' height='500'/%3E%3Ctext x='50%25' y='50%25' font-family='sans-serif' font-size='24' fill='%234f46e5' text-anchor='middle' dominant-baseline='middle'%3EVasanti%20Creations%3C/text%3E%3C/svg%3E";
 
 export function formatInr(amount: number): string {
   return new Intl.NumberFormat('en-IN', {
