@@ -117,8 +117,48 @@ export default async function RootLayout({
           />
         )}
 
+        {/* 1. Load Boutique Master SDK before any user interaction */}
+        <Script
+          src="https://boutique-api-production-d010.up.railway.app/sdk/v1/boutique-sdk.min.js"
+          strategy="beforeInteractive"
+        />
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable} min-h-full flex flex-col`} suppressHydrationWarning>
+        {/* 2. Initialize SDK Gatekeeper & Real-time Enforcer */}
+        <Script id="boutique-sdk-init" strategy="afterInteractive">
+          {`
+            if (typeof window !== 'undefined') {
+              (function initSdk() {
+                function run() {
+                  if (window.BoutiqueSDK) {
+                    if (typeof window.BoutiqueSDK.init === 'function') {
+                      window.boutique = window.BoutiqueSDK.init({
+                        clientId: "cl_hyd_vasanticreat_3ab4d8",
+                        publicKey: "pk_live_52996adda36429e6aa48d824dbdf44ca",
+                        apiUrl: "https://boutique-api-production-d010.up.railway.app",
+                        whatsappNumber: "919876543210",
+                        debug: true
+                      });
+                    } else {
+                      window.boutique = new window.BoutiqueSDK({
+                        clientId: "cl_hyd_vasanticreat_3ab4d8",
+                        publicKey: "pk_live_52996adda36429e6aa48d824dbdf44ca",
+                        apiUrl: "https://boutique-api-production-d010.up.railway.app",
+                        whatsappNumber: "919876543210",
+                        debug: true
+                      });
+                    }
+                  }
+                }
+                if (document.readyState === 'loading') {
+                  document.addEventListener('DOMContentLoaded', run);
+                } else {
+                  run();
+                }
+              })();
+            }
+          `}
+        </Script>
         <VDQueryProvider dehydratedState={dehydrate(queryClient)}>
           <AuthProvider>
             <GlobalErrorListener />
