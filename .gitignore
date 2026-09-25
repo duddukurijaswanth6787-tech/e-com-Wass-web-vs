@@ -15,7 +15,7 @@ coverage
 *.tsbuildinfo
 
 # Local runtime data
-backend/storage
+/backend/storage/
 *.log
 
 # Editor/OS
