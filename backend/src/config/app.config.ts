@@ -98,7 +98,7 @@ export default registerAs('app', () => ({
       process.env.JWT_REFRESH_TOKEN_EXPIRY_DAYS || '7',
       10,
     ),
-    issuer: process.env.JWT_ISSUER || 'vasanthissignature.in',
+    issuer: process.env.JWT_ISSUER || 'vasanthicreations.in',
   },
   hostname: process.env.HOSTNAME || 'localhost',
   monitoring: {

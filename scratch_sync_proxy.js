@@ -1,7 +1,7 @@
 const { Client } = require('pg');
 
 async function main() {
-  const connectionString = 'postgresql://postgres:jlEKlMCjFYyJfSWDlJuCgvrqCVfBivQD@junction.proxy.rlwy.net:47577/railway';
+  const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/vasanthi_creations?schema=public';
   const client = new Client({ connectionString });
   await client.connect();
 

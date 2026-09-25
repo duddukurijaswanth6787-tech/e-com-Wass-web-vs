@@ -31,7 +31,7 @@ async function main() {
   await prisma.systemSetting.upsert({
     where: { key: 'platform_name' },
     update: {},
-    create: { key: 'platform_name', value: "Vasanthi's Signature" },
+    create: { key: 'platform_name', value: 'Vasanthi Creations' },
   });
 
   console.log('Seeding system roles...');
@@ -52,12 +52,12 @@ async function main() {
     update: {},
     create: {
       id: '00000000-0000-0000-0000-000000000001',
-      storeName: "Vasanthi's Signature",
+      storeName: 'Vasanthi Creations',
       storeDescription: 'Premium luxury ethnic wear and lifestyle store',
       supportPhone: '+91 98765 43210',
-      supportEmail: 'care@vasanthissignature.in',
+      supportEmail: 'care@vasanthicreations.in',
       supportHours: 'Mon–Sat, 10:00 AM – 7:00 PM IST',
-      copyrightText: `© ${new Date().getFullYear()} Vasanthi's Signature. All rights reserved.`,
+      copyrightText: `© ${new Date().getFullYear()} Vasanthi Creations. All rights reserved.`,
       maintenanceMode: false,
     },
   });
@@ -231,13 +231,13 @@ async function main() {
   await prisma.attribute.deleteMany({}).catch(() => undefined);
   await prisma.attributeGroup.deleteMany({}).catch(() => undefined);
 
-  console.log("Seeding brand Vasanthi's Signature...");
+  console.log('Seeding brand Vasanthi Creations...');
   const brand = await prisma.brand.upsert({
-    where: { slug: 'vasanthis-signature' },
-    update: { name: "Vasanthi's Signature", isVisible: true, status: 'ACTIVE' },
+    where: { slug: 'vasanthi-creations' },
+    update: { name: 'Vasanthi Creations', isVisible: true, status: 'ACTIVE' },
     create: {
-      name: "Vasanthi's Signature",
-      slug: 'vasanthis-signature',
+      name: 'Vasanthi Creations',
+      slug: 'vasanthi-creations',
       description: 'Premium ethnic wear for women',
       isFeatured: true,
       isVisible: true,

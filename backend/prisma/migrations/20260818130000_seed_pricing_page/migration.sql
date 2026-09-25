@@ -33,8 +33,8 @@ VALUES ('caeda625-e127-4484-9216-ab1b9f290d7e', 'Pricing', 'pricing', '<p style=
 
 <div style="background:#fafafa;border:1px solid #e5e5e5;border-radius:16px;padding:20px;margin-top:24px">
   <h3 style="color:#800020;font-family:Georgia,''Times New Roman'',serif;font-size:15px;font-weight:700;margin:20px 0 8px">Questions About Pricing?</h3>
-  <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">Store: Vasanthi''s Signature<br/>
-  Website: <a href="https://vasanthissignature.in" style="color:#800020;font-weight:700;text-decoration:underline">https://vasanthissignature.in</a><br/>
-  Support Email: <a href="mailto:support@vasanthissignature.in" style="color:#800020;font-weight:700;text-decoration:underline">support@vasanthissignature.in</a></p>
-</div>', 'Pricing | Vasanthi''s Signature', 'Typical price ranges for Vasanthi''s Signature sarees, lehengas, kurtis and dresses, plus accepted payment methods.', 'PUBLISHED', now(), now())
+  <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">Store: Vasanthi Creations<br/>
+  Website: <a href="https://vasanthicreations.in" style="color:#800020;font-weight:700;text-decoration:underline">https://vasanthicreations.in</a><br/>
+  Support Email: <a href="mailto:support@vasanthicreations.in" style="color:#800020;font-weight:700;text-decoration:underline">support@vasanthicreations.in</a></p>
+</div>', 'Pricing | Vasanthi Creations', 'Typical price ranges for Vasanthi Creations sarees, lehengas, kurtis and dresses, plus accepted payment methods.', 'PUBLISHED', now(), now())
 ON CONFLICT ("slug") DO NOTHING;

@@ -10,11 +10,11 @@ import {
   EmailConfigResponse,
 } from './email.types';
 
-const STORE_NAME = "Vasanthi's Signature";
+const STORE_NAME = 'Vasanthi Creations';
 const STORE_ADDRESS =
   'Road No. 12, Banjara Hills, Hyderabad - 500034, Telangana, India';
 const STORE_PHONE = '+91 98765 43210';
-const DEFAULT_FROM = 'orders@vasanthissignature.in';
+const DEFAULT_FROM = 'orders@vasanthicreations.in';
 
 @Injectable()
 export class EmailService {
@@ -362,7 +362,7 @@ export class EmailService {
   private layout(bodyHtml: string): string {
     const frontendUrl = this.configService.get<string>(
       'app.frontendUrl',
-      'https://vasanthissignature.in',
+      'https://vasanthicreations.in',
     );
     const logoUrl = `${frontendUrl}/brand/logo-full.png`;
     return `
@@ -392,7 +392,7 @@ export class EmailService {
         <tr><td style="padding:24px 28px;background:#fbfaf9;border-top:1px solid #f0ece9;color:#737373;font-size:11px;text-align:center;line-height:1.6;">
           <p style="margin:0 0 4px;font-weight:700;color:#171717;">${STORE_NAME}</p>
           <p style="margin:0 0 6px;">${STORE_ADDRESS}</p>
-          <p style="margin:0;">Support & Customer Helpline: <a href="tel:${STORE_PHONE}" style="color:#0284c7;text-decoration:none;font-weight:600;">${STORE_PHONE}</a> | <a href="https://vasanthissignature.in" style="color:#0284c7;text-decoration:none;font-weight:600;">vasanthissignature.in</a></p>
+          <p style="margin:0;">Support & Customer Helpline: <a href="tel:${STORE_PHONE}" style="color:#0284c7;text-decoration:none;font-weight:600;">${STORE_PHONE}</a> | <a href="https://vasanthicreations.in" style="color:#0284c7;text-decoration:none;font-weight:600;">vasanthicreations.in</a></p>
         </td></tr>
       </table>
     </td></tr>
@@ -459,7 +459,7 @@ export class EmailService {
   ) {
     const frontendUrl = this.configService.get<string>(
       'app.frontendUrl',
-      'https://vasanthissignature.in',
+      'https://vasanthicreations.in',
     );
     const html = this.layout(`
       <h2 style="margin:0 0 12px;color:#0f172a;font-size:18px;">Welcome to ${STORE_NAME}${firstName ? `, ${firstName}` : ''}!</h2>
@@ -498,7 +498,7 @@ export class EmailService {
   }) {
     const frontendUrl = this.configService.get<string>(
       'app.frontendUrl',
-      'https://vasanthissignature.in',
+      'https://vasanthicreations.in',
     );
     const trackUrl = `${frontendUrl}/orders/track/${encodeURIComponent(params.orderNumber)}`;
     const invoiceUrl = `${frontendUrl}/orders/details/${encodeURIComponent(params.orderNumber)}`;

@@ -315,7 +315,7 @@ export default function OrdersPage() {
       });
 
       const todayStamp = new Date().toISOString().split('T')[0];
-      const filename = `Vasanthi_Signatures_Orders_${todayStamp}.${exportFormat === 'csv' ? 'csv' : 'xls'}`;
+      const filename = `Vasanthi_Creations_Orders_${todayStamp}.${exportFormat === 'csv' ? 'csv' : 'xls'}`;
 
       if (exportFormat === 'csv') {
         const headers = [
@@ -406,8 +406,8 @@ export default function OrdersPage() {
  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
  xmlns:html="http://www.w3.org/TR/REC-html40">
  <DocumentProperties xmlns="urn:schemas-microsoft-com:office:office">
-  <Title>Vasanthi's Signature Orders Report</Title>
-  <Author>Vasanthi Signatures</Author>
+  <Title>Vasanthi Creations Orders Report</Title>
+  <Author>Vasanthi Creations</Author>
   <Created>${new Date().toISOString()}</Created>
  </DocumentProperties>
  <Styles>

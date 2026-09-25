@@ -8,7 +8,7 @@ export default defineConfig({
   workers: 2,
   reporter: [['html', { open: 'never' }], ['list']],
   use: {
-    baseURL: process.env.PLAYWRIGHT_TEST_BASE_URL || 'https://vasanthissignature.in',
+    baseURL: process.env.PLAYWRIGHT_TEST_BASE_URL || 'https://vasanthicreations.in',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://api.vasanthissignature.in/api/v1';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://api.vasanthicreations.in/api/v1';
 
 test.describe('Admin Console E2E Verification', () => {
   test('admin authentication and endpoint validation', async ({ request }) => {

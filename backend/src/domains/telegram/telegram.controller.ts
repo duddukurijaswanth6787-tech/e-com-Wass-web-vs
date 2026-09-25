@@ -85,7 +85,7 @@ export class TelegramController {
   async setupWebhook(
     @Body('url') url?: string,
   ) {
-    const targetUrl = url || 'https://api.vasanthissignature.in';
+    const targetUrl = url || process.env.API_BASE_URL || 'https://api.vasanthicreations.in';
     const result = await this.telegramService.setupWebhook(targetUrl);
     return ResponseBuilder.success(result, 'Telegram Webhook registered successfully');
   }

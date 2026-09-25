@@ -7,6 +7,6 @@ export default function robots(): MetadataRoute.Robots {
       allow: "/",
       disallow: ["/admin/", "/api/", "/pos/", "/account/"],
     },
-    sitemap: "https://vasanthissignature.in/sitemap.xml",
+    sitemap: "https://vasanthicreations.in/sitemap.xml",
   };
 }

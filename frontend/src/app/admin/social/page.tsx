@@ -508,7 +508,7 @@ export default function SocialDashboardPage() {
 function CreatePostModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
   const [contentType, setContentType] = useState<SocialPostContentType>(SocialPostContentType.REEL);
   const [caption, setCaption] = useState('');
-  const [hashtags, setHashtags] = useState('#vasanthissignature #ethnicwear #festive');
+  const [hashtags, setHashtags] = useState('#vasanthicreations #ethnicwear #festive');
   const [visibility] = useState<SocialPostVisibility>(SocialPostVisibility.PUBLIC);
   const [allowComments] = useState(true);
   const [displayOrder, setDisplayOrder] = useState<number>(0);
@@ -837,7 +837,7 @@ function CreatePostModal({ onClose, onSuccess }: { onClose: () => void; onSucces
                     type="text"
                     value={hashtags}
                     onChange={(e) => setHashtags(e.target.value)}
-                    placeholder="#vasanthissignature #ethnicwear #festive"
+                    placeholder="#vasanthicreations #ethnicwear #festive"
                     className="w-full bg-neutral-50 border border-neutral-200 rounded-xl px-3 py-1.5 text-xs font-mono text-neutral-900"
                   />
                 </div>
@@ -855,7 +855,7 @@ function CreatePostModal({ onClose, onSuccess }: { onClose: () => void; onSucces
 
               {/* Popular Hashtags Pill Chips */}
               <div className="flex flex-wrap gap-1 mt-1">
-                {['#vasanthissignature', '#dresses', '#lehenga', '#anarkali', '#festive', '#wedding'].map((tag) => (
+                {['#vasanthicreations', '#dresses', '#lehenga', '#anarkali', '#festive', '#wedding'].map((tag) => (
                   <button
                     key={tag}
                     type="button"
@@ -993,13 +993,13 @@ function CreatePostModal({ onClose, onSuccess }: { onClose: () => void; onSucces
                   <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-ping" />
                   Reels
                 </span>
-                <span className="text-neutral-300">Vasanthi&apos;s Signature</span>
+                <span className="text-neutral-300">Vasanthi Creations</span>
               </div>
 
               {/* Overlay Bottom Content */}
               <div className="relative z-10 p-3 bg-gradient-to-t from-black/90 via-black/40 to-transparent space-y-1.5 text-left">
                 <div className="text-[9px] font-bold text-white leading-tight line-clamp-1">
-                  @vasanthissignature
+                  @vasanthicreations
                 </div>
                 <div className="text-[8px] text-neutral-200 line-clamp-2 leading-tight">
                   {caption || 'Reel caption description preview...'}

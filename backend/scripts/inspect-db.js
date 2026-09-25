@@ -1,7 +1,7 @@
 const { Client } = require('pg');
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 
-const LIVE_DB_URL = 'postgresql://postgres:jlEKlMCjFYyJfSWDlJuCgvrqCVfBivQD@junction.proxy.rlwy.net:47577/railway';
+const LIVE_DB_URL = process.env.LIVE_DATABASE_URL || process.env.DATABASE_URL;
 
 async function inspectDb() {
   const isLive = process.argv.includes('--live');

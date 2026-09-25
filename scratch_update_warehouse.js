@@ -1,8 +1,7 @@
 const { Client } = require('pg');
 
 const client = new Client({
-  connectionString: 'postgresql://postgres:UmAGPwHEyraVlnXxcZgFGdljetlkyEFL@nozomi.proxy.rlwy.net:16688/railway',
-  ssl: { rejectUnauthorized: false }
+  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/vasanthi_creations?schema=public',
 });
 
 async function main() {
@@ -14,7 +13,7 @@ async function main() {
       "postalCode" = '500033',
       phone = '+91 98765 43210',
       "contactPerson" = 'Store Dispatch Manager',
-      email = 'contact@vasanthissignature.in',
+      email = 'contact@vasanthicreations.in',
       "updatedAt" = NOW()
     WHERE id = 'b9e39ab4-10c9-4e64-a58a-d34ac87022fd'
   `);

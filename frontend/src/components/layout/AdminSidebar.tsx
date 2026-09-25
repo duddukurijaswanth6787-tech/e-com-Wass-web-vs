@@ -90,7 +90,7 @@ export default function AdminSidebar() {
             {!sidebarCollapsed && (
               <div className="flex flex-col min-w-0">
                 <span className="text-xs font-bold tracking-tight text-neutral-900 uppercase truncate">
-                  Vasanthi&apos;s Signature
+                  Vasanthi Creations
                 </span>
                 <span className="text-[10px] font-medium text-neutral-500 tracking-normal">
                   Admin Console

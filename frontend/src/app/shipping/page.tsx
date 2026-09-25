@@ -6,7 +6,7 @@ const path = '/shipping';
 
 export const metadata: Metadata = {
   title: 'Shipping & Delivery Policy',
-  description: "Shipping timelines, delivery areas and charges for orders placed with Vasanthi's Signature.",
+  description: 'Shipping timelines, delivery areas and charges for orders placed with Vasanthi Creations.',
   alternates: { canonical: path },
   openGraph: { ...siteOpenGraph, url: path },
 };

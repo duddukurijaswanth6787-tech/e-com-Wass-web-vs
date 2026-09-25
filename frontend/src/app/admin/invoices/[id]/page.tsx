@@ -135,7 +135,7 @@ export default function InvoiceDetailPage() {
               </p>
               <div className="mt-2 text-2xs font-mono space-y-0.5">
                 <p className="font-bold text-neutral-800">GSTIN: 36AABCU9603R1ZM</p>
-                <p className="text-neutral-500">State: Telangana (Code: 36) · Email: care@vasanthissignature.in</p>
+                <p className="text-neutral-500">State: Telangana (Code: 36) · Email: care@vasanthicreations.in</p>
               </div>
             </div>
 
@@ -433,7 +433,7 @@ export default function InvoiceDetailPage() {
 
             <div className="text-center text-[9px] text-neutral-500 border-t border-dashed border-neutral-200 pt-3 space-y-0.5">
               <p>*** THANK YOU FOR SHOPPING ***</p>
-              <p>Visit again: vasanthissignature.in</p>
+              <p>Visit again: vasanthicreations.in</p>
             </div>
           </div>
         </div>

@@ -26,7 +26,7 @@ export function mapProductToItem(p: ProductResponse): ProductItem {
   const originalPrice = p.basePrice;
   return {
     id: p.id,
-    brand: p.brandName || "Vasanthi's Signature",
+    brand: p.brandName || "Vasanthi Creations",
     title: p.name,
     price,
     originalPrice,

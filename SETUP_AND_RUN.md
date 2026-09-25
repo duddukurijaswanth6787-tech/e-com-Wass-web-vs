@@ -1,14 +1,14 @@
-# Project Transfer & Setup Guide for Personal Laptop 🚀
+# Vasanthi Creations - Setup & Deployment Guide 🚀
 
-This document provides complete step-by-step instructions to setup, configure, and run the **Vasanthi Designers** project on your personal laptop.
+This document provides complete step-by-step instructions to setup, configure, and run the **Vasanthi Creations** project locally or deploy to production.
 
-## 🌐 Production Domain & Deployment URLs
+## 🌐 Production Domain & Deployment URLs (Configure for your client)
 
-- **Primary Custom Domain**: **[https://vasanthissignature.in](https://vasanthissignature.in)**
-- **Admin Panel**: **[https://vasanthissignature.in/admin](https://vasanthissignature.in/admin)**
-- **AWS Billing Dashboard**: **[https://vasanthissignature.in/admin/aws-billing](https://vasanthissignature.in/admin/aws-billing)**
-- **Vercel Frontend Host**: `https://vs-web-app-frontend.vercel.app`
-- **Railway Backend API**: `https://api.vasanthissignature.in/api/v1` (`https://vsss-production.up.railway.app`)
+- **Primary Custom Domain**: `https://vasanthicreations.in` (Or client's custom domain)
+- **Admin Panel**: `https://vasanthicreations.in/admin`
+- **AWS Billing Dashboard**: `https://vasanthicreations.in/admin/aws-billing`
+- **Frontend Host**: Vercel (e.g. `https://vasanthi-creations-frontend.vercel.app`)
+- **Backend API**: Railway / Cloud Container (e.g. `https://api.vasanthicreations.in/api/v1`)
 
 ---
 

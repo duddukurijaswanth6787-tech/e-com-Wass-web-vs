@@ -63,7 +63,7 @@ const BluetoothTscPrinter = (BluetoothPrinterNative?.BluetoothTscPrinter || null
 const ALIGN = { LEFT: 0, CENTER: 1, RIGHT: 2 };
 const TEAR = { ON: 'ON', OFF: 'OFF' };
 const READABLE = { DISABLE: 0, ENABLE: 1 };
-const FONTTYPE = { FONT_1: '1', FONT_2: '2' };
+const FONTTYPE = { FONT_1: '1', FONT_2: '2', FONT_3: '3', FONT_4: '4', FONT_5: '5' };
 const TSC_ROTATION = { ROTATION_0: 0 };
 const TSC_BARCODETYPE = { CODE128: '128' };
 const DIRECTION = { FORWARD: 0, BACKWARD: 1 };
@@ -431,7 +431,7 @@ class BluetoothPrinterService {
     await P.setWidth(PAGE_WIDTH.WIDTH_80);
     await P.printerAlign(ALIGN.CENTER);
     await P.printText('================================================\n\r', { codepage: 1 });
-    await P.printText("VASANTHI'S SIGNATURE\n\r", { widthtimes: 1, heigthtimes: 1, codepage: 1 });
+    await P.printText("VASANTHI CREATIONS\n\r", { widthtimes: 1, heigthtimes: 1, codepage: 1 });
     await P.printText('POS Thermal Receipt Test\n\r', { codepage: 1 });
     await P.printText('Bluetooth Connection: OK\n\r', { codepage: 1 });
     await P.printText('================================================\n\r\n\r\n\r', { codepage: 1 });
@@ -454,7 +454,7 @@ class BluetoothPrinterService {
       sku: 'VS-TEST-001',
       barcode: '890123456789',
       price: 4999,
-      storeName: "VASANTHI'S SIGNATURE",
+      storeName: 'VASANTHI CREATIONS',
       widthMm,
       heightMm,
       quantity: 1,
@@ -462,7 +462,7 @@ class BluetoothPrinterService {
   }
 
   /**
-   * Prints the official brand logo (Vasanthi's Signature) on a 3x2" (75x50mm) label sticker.
+   * Prints the official brand logo (Vasanthi Creations) on a 3x2" (75x50mm) label sticker.
    */
   async testPrintLogo(widthMm = 75, heightMm = 50): Promise<void> {
     if (!this.isConnected()) {
@@ -489,7 +489,7 @@ class BluetoothPrinterService {
             bold: true,
           },
           {
-            text: 'www.vasanthissignature.in',
+            text: 'www.vasanthicreations.in',
             x: 155,
             y: 315,
             fonttype: FONTTYPE.FONT_1,
@@ -673,7 +673,7 @@ class BluetoothPrinterService {
     // 5. Footer (Centered)
     await P.printerAlign(ALIGN.CENTER);
     await P.printText('*** THANK YOU FOR SHOPPING WITH US! ***\n\r', opt);
-    await P.printText('Visit again : vasanthissignature.in\n\r', opt);
+    await P.printText('Visit again : vasanthicreations.in\n\r', opt);
 
     // Feed lines before cutting
     await P.printText('\n\r\n\r\n\r', opt);
@@ -720,7 +720,7 @@ class BluetoothPrinterService {
       const textFields = is3x2
         ? [
             {
-              text: "VASANTHI'S SIGNATURE",
+              text: 'VASANTHI CREATIONS',
               x: 55,
               y: 20,
               fonttype: FONTTYPE.FONT_3,
@@ -907,7 +907,7 @@ class BluetoothPrinterService {
 
         // Header / Store Name
         await P.printText(`${divider}\n\r`, {});
-        await P.printText(`${(label.storeName || "VASANTHI'S SIGNATURE").toUpperCase()}\n\r`, {
+        await P.printText(`${(label.storeName || 'VASANTHI CREATIONS').toUpperCase()}\n\r`, {
           widthtimes: 1,
           heigthtimes: 1,
         });
@@ -1081,7 +1081,7 @@ class BluetoothPrinterService {
         bold: true,
       },
       {
-        text: (shipping.sellerName || "Vasanthi's Signature").slice(0, 24),
+        text: (shipping.sellerName || 'Vasanthi Creations').slice(0, 24),
         x: 35,
         y: 185,
         fonttype: FONTTYPE.FONT_3,
@@ -1479,7 +1479,7 @@ class BluetoothPrinterService {
         bold: true,
       },
       {
-        text: (shipping.sellerName || "Vasanthi's Signature").slice(0, 24),
+        text: (shipping.sellerName || 'Vasanthi Creations').slice(0, 24),
         x: 35,
         y: 1025,
         fonttype: FONTTYPE.FONT_2,

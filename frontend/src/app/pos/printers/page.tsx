@@ -228,7 +228,7 @@ export default function PrintersConfigPage() {
         <div class="flex-between" style="font-size: ${is80mm ? '10px' : '8.5px'};"><span>Payment Mode:</span><span>UPI / PhonePe</span></div>
         <div class="border-top"></div>
         <div class="text-center font-bold" style="margin-top: 6px;">*** THANK YOU FOR SHOPPING WITH US! ***</div>
-        <div class="text-center" style="font-size: ${is80mm ? '10px' : '8.5px'}; margin-top: 2px;">Visit again : vasanthissignature.in</div>
+        <div class="text-center" style="font-size: ${is80mm ? '10px' : '8.5px'}; margin-top: 2px;">Visit again : vasanthicreations.in</div>
       </body>
     </html>
     `;
@@ -402,9 +402,9 @@ export default function PrintersConfigPage() {
       <body>
         <div class="sticker-box">
           <div class="logo-symbol">❖</div>
-          <div class="brand-main">VASANTHI'S SIGNATURE</div>
+          <div class="brand-main">VASANTHI CREATIONS</div>
           <div class="tagline">Women's Ethnic Wear &amp; Designer Boutique</div>
-          <div class="footer-url">Hyderabad • vasanthissignature.in</div>
+          <div class="footer-url">Hyderabad • vasanthicreations.in</div>
         </div>
       </body>
     </html>
@@ -855,12 +855,12 @@ export default function PrintersConfigPage() {
               {/* 3x2 Brand Logo Preview */}
               <div className="max-w-xs mx-auto bg-white p-6 rounded-xl border-2 border-neutral-900 shadow-sm font-serif text-center space-y-1">
                 <div className="text-2xl font-bold">❖</div>
-                <div className="font-black text-sm tracking-wider">VASANTHI'S SIGNATURE</div>
+                <div className="font-black text-sm tracking-wider">VASANTHI CREATIONS</div>
                 <div className="font-sans text-[8.5px] tracking-widest uppercase font-semibold text-neutral-600">
                   Women's Ethnic Wear &amp; Designer Boutique
                 </div>
                 <div className="border-t border-neutral-900 mt-3 pt-1 font-sans text-[8px] text-neutral-500">
-                  Hyderabad • vasanthissignature.in
+                  Hyderabad • vasanthicreations.in
                 </div>
               </div>
 

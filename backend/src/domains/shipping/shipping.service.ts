@@ -412,7 +412,7 @@ export class ShippingService {
         <!-- Footer -->
         <div class="label-footer">
           <div>Package ${idx + 1} of ${labels.length}</div>
-          <div>VASANTHISSIGNATURE.IN · OFFICIAL DISPATCH</div>
+          <div>VASANTHICREATIONS.IN · OFFICIAL DISPATCH</div>
         </div>
       </div>
     `,
@@ -423,7 +423,7 @@ export class ShippingService {
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Shipping Labels (${labels.length} Orders) - Vasanthi's Signature</title>
+  <title>Shipping Labels (${labels.length} Orders) - Vasanthi Creations</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f0f0f0; padding: ${isThermal ? '0' : '20px'}; color: #000; }

@@ -95,7 +95,7 @@ export default function ShoporaHomeScreen() {
             <Text style={styles.logoSymbol}>❖</Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.storeName}>Vasanthi's Signature</Text>
+            <Text style={styles.storeName}>Vasanthi Creations</Text>
             <Text style={styles.storeTagline}>Shopora Retail & Inventory System</Text>
           </View>
           {authed ? (

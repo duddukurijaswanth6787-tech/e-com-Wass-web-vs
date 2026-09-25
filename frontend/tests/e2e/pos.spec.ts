@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://api.vasanthissignature.in/api/v1';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://api.vasanthicreations.in/api/v1';
 
 test.describe('POS Counter Billing System E2E Suite', () => {
   test('authenticates staff/admin and validates POS billing endpoints', async ({ request }) => {

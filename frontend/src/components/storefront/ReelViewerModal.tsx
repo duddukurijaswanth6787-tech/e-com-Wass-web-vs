@@ -424,7 +424,7 @@ export function ReelViewerModal({
                     {currentReel.accountName}
                   </h3>
                   <span className="text-[11px] text-neutral-500">
-                    Vasanthi&apos;s Signature Official
+                    Vasanthi Creations Official
                   </span>
                 </div>
               </div>

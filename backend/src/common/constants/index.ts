@@ -73,7 +73,7 @@ export const ERROR_CODES = {
  * Metadata parameters describing the system deployment.
  */
 export const APP_METADATA = {
-  NAME: 'Vasanthi Designers',
+  NAME: 'Vasanthi Creations',
   VERSION: '1.0.0',
   API_PREFIX: 'api/v1',
   DEFAULT_TIMEZONE: 'Asia/Kolkata',

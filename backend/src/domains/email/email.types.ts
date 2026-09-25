@@ -97,12 +97,12 @@ export class UpdateEmailConfigDto {
   @IsString()
   smtpPassword?: string;
 
-  @ApiPropertyOptional({ example: 'orders@vasanthissignature.in' })
+  @ApiPropertyOptional({ example: 'orders@vasanthicreations.in' })
   @IsOptional()
   @IsString()
   fromAddress?: string;
 
-  @ApiPropertyOptional({ example: "Vasanthi's Signature" })
+  @ApiPropertyOptional({ example: 'Vasanthi Creations' })
   @IsOptional()
   @IsString()
   fromName?: string;
@@ -119,7 +119,7 @@ export class UpdateEmailConfigDto {
 }
 
 export class SendTestEmailDto {
-  @ApiProperty({ example: 'admin@vasanthissignature.in' })
+  @ApiProperty({ example: 'admin@vasanthicreations.in' })
   @IsEmail()
   to!: string;
 }

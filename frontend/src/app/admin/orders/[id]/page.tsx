@@ -95,11 +95,11 @@ export default function OrderDetailPage() {
   const [waybillNumber, setWaybillNumber] = useState('');
   const [trackingUrl, setTrackingUrl] = useState('');
   const [serviceSpeed, setServiceSpeed] = useState('Air Express (1-2 Days)');
-  const [pickupWarehouse, setPickupWarehouse] = useState("Vasanthi's Signature Main Hub (Jubilee Hills, Hyderabad - 500033)");
+  const [pickupWarehouse, setPickupWarehouse] = useState('Vasanthi Creations Main Hub (Jubilee Hills, Hyderabad - 500033)');
 
   // Sync default pickup warehouse from DB if available
   React.useEffect(() => {
-    if (activeWarehouses.length > 0 && pickupWarehouse.includes("Vasanthi's Signature Main Hub")) {
+    if (activeWarehouses.length > 0 && (pickupWarehouse.includes('Vasanthi Creations Main Hub') || pickupWarehouse.includes("Vasanthi's Signature Main Hub"))) {
       const defaultWh = activeWarehouses.find((w) => w.isDefault) || activeWarehouses[0];
       if (defaultWh) {
         setPickupWarehouse(`${defaultWh.name} (${defaultWh.city || 'Hub'}${defaultWh.postalCode ? ` - ${defaultWh.postalCode}` : ''})`);
@@ -885,8 +885,8 @@ export default function OrderDetailPage() {
                       ))
                     ) : (
                       <>
-                        <option value="Vasanthi's Signature Main Hub (Jubilee Hills, Hyderabad - 500033)">
-                          🏭 Vasanthi's Signature Main Hub (Jubilee Hills, Hyderabad - 500033) ⭐ [Primary]
+                        <option value="Vasanthi Creations Main Hub (Jubilee Hills, Hyderabad - 500033)">
+                          🏭 Vasanthi Creations Main Hub (Jubilee Hills, Hyderabad - 500033) ⭐ [Primary]
                         </option>
                         <option value="Madhapur Retail Store & Dispatch (Hyderabad - 500081)">
                           🏬 Madhapur Retail Store & Dispatch (Hyderabad - 500081)

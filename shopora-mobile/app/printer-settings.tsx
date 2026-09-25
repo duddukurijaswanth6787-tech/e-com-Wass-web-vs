@@ -137,7 +137,7 @@ export default function PrinterSettingsScreen() {
     try {
       if (type === 'logo3x2') {
         await bluetoothPrinterService.testPrintLogo(75, 50);
-        Alert.alert('3×2" Brand Logo Sent', "Printed Vasanthi's Signature logo sticker.");
+        Alert.alert('3×2" Brand Logo Sent', 'Printed Vasanthi Creations logo sticker.');
       } else if (type === 'label3x2') {
         await bluetoothPrinterService.testPrintLabel(75, 50);
         Alert.alert('3×2" Tag Sent', 'Printed 3×2" Barcode Price Tag to label printer.');

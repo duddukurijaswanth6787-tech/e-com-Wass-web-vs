@@ -142,7 +142,7 @@ export function StorefrontFooter() {
       {/* 4. Bottom Legal Bar */}
       <div className="bg-[color-mix(in_oklab,var(--footer-bg)_25%,black)] border-t border-sky-950/80 py-2.5 px-4 sm:px-6 lg:px-8 text-sky-300/60 text-[10px]">
         <div className="max-w-[1440px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-1.5 text-center sm:text-left">
-          <span>© 2026 Vasanthi&apos;s Signature. All rights reserved.</span>
+          <span>© 2026 Vasanthi Creations. All rights reserved.</span>
 
           <div className="flex items-center gap-2.5 justify-center text-[9px]">
             <Link href="/privacy" className="hover:text-[var(--footer-link-hover)] transition-colors">Privacy Policy</Link>

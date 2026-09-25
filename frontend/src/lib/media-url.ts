@@ -28,11 +28,6 @@ export function resolveMediaUrl(url?: string | null): string {
 
   const backendOrigin = getBackendOrigin();
 
-  // Rewrite legacy railway domain to live api.vasanthissignature.in
-  if (url.includes('vsss-production.up.railway.app')) {
-    url = url.replace('https://vsss-production.up.railway.app', backendOrigin);
-  }
-
   // 2. Convert any dev/local backend origin (localhost:4000, 127.0.0.1:4000, 192.168.x.x:4000) to current environment's backend origin
   if (/^https?:\/\/[^\/]+:4000/i.test(url)) {
     return url.replace(/^https?:\/\/[^\/]+:4000/i, backendOrigin);

@@ -1,5 +1,5 @@
 async function main() {
-  const url = 'https://api.vasanthissignature.in/api/v1';
+  const url = process.env.API_BASE_URL || 'http://localhost:4000/api/v1';
   const loginRes = await fetch(`${url}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

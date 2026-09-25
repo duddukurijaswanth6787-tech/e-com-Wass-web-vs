@@ -10,7 +10,7 @@ import * as SecureStore from 'expo-secure-store';
  * the box for anyone who hasn't set up a `.env`.
  */
 export const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.vasanthissignature.in/api/v1';
+  process.env.EXPO_PUBLIC_API_BASE_URL || 'https://api.vasanthicreations.in/api/v1';
 
 /** Origin without the `/api/v1` suffix — used by the websocket namespace. */
 export const API_ORIGIN = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
@@ -571,6 +571,14 @@ export const posMobileService = {
     }>(res);
   },
 };
+
+export interface DashboardSummary {
+  todayRevenue?: number;
+  todayItemsSold?: number;
+  lowStockCount?: number;
+  todayOrdersCount?: number;
+  [key: string]: any;
+}
 
 let cachedSummary: DashboardSummary | null = null;
 

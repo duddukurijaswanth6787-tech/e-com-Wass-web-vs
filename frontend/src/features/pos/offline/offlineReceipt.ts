@@ -9,7 +9,7 @@ import { PendingSale } from './offline.types';
  * order number and stock are not yet confirmed by the server.
  */
 export function generateOfflineReceiptHtml(sale: PendingSale): string {
-  const storeName = "VASANTHI'S SIGNATURE";
+  const storeName = 'VASANTHI CREATIONS';
   const storeTagline = 'Haute Couture & Boutique';
   const address = 'Road No. 12, Banjara Hills, Hyderabad - 500034';
   const phone = '+91 98765 43210';

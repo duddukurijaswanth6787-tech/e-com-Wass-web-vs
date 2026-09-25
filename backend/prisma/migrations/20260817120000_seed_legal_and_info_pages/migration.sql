@@ -40,16 +40,16 @@ VALUES ('5fbd2183-a558-4cca-82e9-ccc38126259a', 'Terms of Service', 'terms', '<h
 
 <div style="background:#fafafa;border:1px solid #e5e5e5;border-radius:16px;padding:20px;margin-top:24px">
   <h3 style="color:#800020;font-family:Georgia,''Times New Roman'',serif;font-size:15px;font-weight:700;margin:20px 0 8px">Questions About Terms of Service?</h3>
-  <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">Store: Vasanthi''s Signature<br/>
-  Website: <a href="https://vasanthissignature.in" style="color:#800020;font-weight:700;text-decoration:underline">https://vasanthissignature.in</a><br/>
-  Support Email: <a href="mailto:support@vasanthissignature.in" style="color:#800020;font-weight:700;text-decoration:underline">support@vasanthissignature.in</a></p>
-</div>', 'Terms of Service | Vasanthi''s Signature', 'Terms and conditions for using Vasanthi''s Signature - website usage, orders, payments, and customer responsibilities.', 'PUBLISHED', now(), now())
+  <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">Store: Vasanthi Creations<br/>
+  Website: <a href="https://vasanthicreations.in" style="color:#800020;font-weight:700;text-decoration:underline">https://vasanthicreations.in</a><br/>
+  Support Email: <a href="mailto:support@vasanthicreations.in" style="color:#800020;font-weight:700;text-decoration:underline">support@vasanthicreations.in</a></p>
+</div>', 'Terms of Service | Vasanthi Creations', 'Terms and conditions for using Vasanthi Creations - website usage, orders, payments, and customer responsibilities.', 'PUBLISHED', now(), now())
 ON CONFLICT ("slug") DO NOTHING;
 
 INSERT INTO "cms_pages" ("id", "title", "slug", "content", "metaTitle", "metaDescription", "status", "createdAt", "updatedAt")
 VALUES ('a396407f-2669-4b0b-b8e8-97e8c81c18e1', 'Privacy Policy', 'privacy', '<div style="background:#fafafa;border:1px solid #e5e5e5;border-radius:16px;padding:20px;margin-top:24px">
   <h3 style="color:#800020;font-family:Georgia,''Times New Roman'',serif;font-size:15px;font-weight:700;margin:20px 0 8px">Google OAuth 2.0 &amp; Social Sign-In Data Commitment</h3>
-  <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">When you use "Continue with Google" to log into Vasanthi''s Signature, we only access basic account identity details (your primary email address, full name, and avatar image). We never store your Google passwords, access your private Gmail messages, or sell Google user data to third-party advertisers.</p>
+  <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">When you use "Continue with Google" to log into Vasanthi Creations, we only access basic account identity details (your primary email address, full name, and avatar image). We never store your Google passwords, access your private Gmail messages, or sell Google user data to third-party advertisers.</p>
 </div>
 <h2 style="color:#800020;font-family:Georgia,''Times New Roman'',serif;font-size:18px;font-weight:700;border-bottom:1px solid #ffe4e6;padding-bottom:8px;margin:24px 0 12px">1. Information We Collect</h2>
 <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">We collect information to provide better services to all our customers, fulfill orders, process payments, and improve your shopping experience.</p>
@@ -63,7 +63,7 @@ VALUES ('a396407f-2669-4b0b-b8e8-97e8c81c18e1', 'Privacy Policy', 'privacy', '<d
 <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">Our application uses Google API Services to allow fast, 1-click customer authentication. Our use and transfer of information received from Google APIs adhere to the Google API Service User Data Policy, including the Limited Use requirements.</p>
 <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">Google OAuth data is used only to create and manage your customer account, send order receipts, shipment notifications, and customer support communications, and provide personalized wishlist and loyalty reward tracking. We do not share, transfer, or sell your Google User Data to any advertising networks, data brokers, or third parties. You may revoke access at any time through your Google Security Settings.</p>
 <h2 style="color:#800020;font-family:Georgia,''Times New Roman'',serif;font-size:18px;font-weight:700;border-bottom:1px solid #ffe4e6;padding-bottom:8px;margin:24px 0 12px">3. Payment Processing &amp; Financial Security</h2>
-<p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">All online payment transactions (Credit Cards, Debit Cards, NetBanking, and UPI) are processed through PCI-DSS Level 1 compliant payment gateways (Razorpay). Vasanthi''s Signature does NOT store or record card numbers, CVVs, or NetBanking passwords on our servers. All credit card details are encrypted using 256-bit SSL encryption provided by our payment gateway partners.</p>
+<p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">All online payment transactions (Credit Cards, Debit Cards, NetBanking, and UPI) are processed through PCI-DSS Level 1 compliant payment gateways (Razorpay). Vasanthi Creations does NOT store or record card numbers, CVVs, or NetBanking passwords on our servers. All credit card details are encrypted using 256-bit SSL encryption provided by our payment gateway partners.</p>
 <h2 style="color:#800020;font-family:Georgia,''Times New Roman'',serif;font-size:18px;font-weight:700;border-bottom:1px solid #ffe4e6;padding-bottom:8px;margin:24px 0 12px">4. Cookies &amp; Local Storage</h2>
 <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">We use session cookies and browser LocalStorage (e.g., guest cart and wishlist tokens) to remember items in your shopping bag, maintain active sessions, and provide seamless page navigation. You can control or disable cookies through your web browser settings.</p>
 <h2 style="color:#800020;font-family:Georgia,''Times New Roman'',serif;font-size:18px;font-weight:700;border-bottom:1px solid #ffe4e6;padding-bottom:8px;margin:24px 0 12px">5. Data Deletion &amp; Customer Rights</h2>
@@ -71,10 +71,10 @@ VALUES ('a396407f-2669-4b0b-b8e8-97e8c81c18e1', 'Privacy Policy', 'privacy', '<d
 
 <div style="background:#fafafa;border:1px solid #e5e5e5;border-radius:16px;padding:20px;margin-top:24px">
   <h3 style="color:#800020;font-family:Georgia,''Times New Roman'',serif;font-size:15px;font-weight:700;margin:20px 0 8px">Contact Our Data Governance Team</h3>
-  <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">Store: Vasanthi''s Signature<br/>
-  Website: <a href="https://vasanthissignature.in" style="color:#800020;font-weight:700;text-decoration:underline">https://vasanthissignature.in</a><br/>
-  Support Email: <a href="mailto:support@vasanthissignature.in" style="color:#800020;font-weight:700;text-decoration:underline">support@vasanthissignature.in</a></p>
-</div>', 'Privacy Policy | Vasanthi''s Signature', 'How Vasanthi''s Signature collects, uses, and protects your personal and payment-related data.', 'PUBLISHED', now(), now())
+  <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">Store: Vasanthi Creations<br/>
+  Website: <a href="https://vasanthicreations.in" style="color:#800020;font-weight:700;text-decoration:underline">https://vasanthicreations.in</a><br/>
+  Support Email: <a href="mailto:support@vasanthicreations.in" style="color:#800020;font-weight:700;text-decoration:underline">support@vasanthicreations.in</a></p>
+</div>', 'Privacy Policy | Vasanthi Creations', 'How Vasanthi Creations collects, uses, and protects your personal and payment-related data.', 'PUBLISHED', now(), now())
 ON CONFLICT ("slug") DO NOTHING;
 
 INSERT INTO "cms_pages" ("id", "title", "slug", "content", "metaTitle", "metaDescription", "status", "createdAt", "updatedAt")
@@ -124,8 +124,8 @@ VALUES ('9d6a0989-0f2f-495c-93a4-9c116b8dd8c5', 'Cancellation & Refund Policy', 
 
 <div style="background:#fafafa;border:1px solid #e5e5e5;border-radius:16px;padding:20px;margin-top:24px">
   <h3 style="color:#800020;font-family:Georgia,''Times New Roman'',serif;font-size:15px;font-weight:700;margin:20px 0 8px">Need Help With an Order?</h3>
-  <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">Store: Vasanthi''s Signature<br/>
-  Website: <a href="https://vasanthissignature.in" style="color:#800020;font-weight:700;text-decoration:underline">https://vasanthissignature.in</a><br/>
-  Support Email: <a href="mailto:support@vasanthissignature.in" style="color:#800020;font-weight:700;text-decoration:underline">support@vasanthissignature.in</a></p>
-</div>', 'Cancellation & Refund Policy | Vasanthi''s Signature', 'Order cancellation rules, return eligibility, and the refund process and timeline at Vasanthi''s Signature.', 'PUBLISHED', now(), now())
+  <p style="font-size:13px;line-height:1.7;color:#404040;margin:0 0 12px">Store: Vasanthi Creations<br/>
+  Website: <a href="https://vasanthicreations.in" style="color:#800020;font-weight:700;text-decoration:underline">https://vasanthicreations.in</a><br/>
+  Support Email: <a href="mailto:support@vasanthicreations.in" style="color:#800020;font-weight:700;text-decoration:underline">support@vasanthicreations.in</a></p>
+</div>', 'Cancellation & Refund Policy | Vasanthi Creations', 'Order cancellation rules, return eligibility, and the refund process and timeline at Vasanthi Creations.', 'PUBLISHED', now(), now())
 ON CONFLICT ("slug") DO NOTHING;

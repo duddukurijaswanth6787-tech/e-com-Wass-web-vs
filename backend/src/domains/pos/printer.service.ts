@@ -19,19 +19,19 @@ interface StoreSettings {
 }
 
 const FALLBACK_SETTINGS: StoreSettings = {
-  storeName: "Vasanthi's Signature",
+  storeName: 'Vasanthi Creations',
   storeDescription: 'Premium ethnic wear & boutique',
   address: 'Road No. 12, Banjara Hills, Hyderabad - 500034',
   phone: '+91 98765 43210',
-  email: 'support@vasanthissignature.in',
-  website: 'vasanthissignature.in',
+  email: 'support@vasanthicreations.in',
+  website: 'vasanthicreations.in',
   // Left blank when the shop hasn't configured them yet -- rendering shows
   // a dash rather than fake data, so an unset GSTIN is visible on the paper.
   gstin: '',
   city: 'Hyderabad',
   state: 'Telangana',
   pincode: '500034',
-  logoUrl: 'https://vasanthissignature.in/brand/logo-full.png',
+  logoUrl: 'https://vasanthicreations.in/brand/logo-full.png',
 };
 
 const BELOW_TWENTY = [

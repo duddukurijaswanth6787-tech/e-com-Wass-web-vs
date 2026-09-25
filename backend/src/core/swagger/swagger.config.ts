@@ -14,14 +14,14 @@ export function setupSwagger(
     .setDescription("Enterprise-grade Women's Fashion E-commerce Platform API")
     .setVersion(APP_METADATA.VERSION)
     .setContact(
-      "Vasanthi's Signature",
-      'https://vasanthissignature.in',
-      'support@vasanthissignature.in',
+      'Vasanthi Creations',
+      'https://vasanthicreations.in',
+      'support@vasanthicreations.in',
     )
     .setLicense('UNLICENSED', '')
     .addServer(
       configService.get<string>('app.env') === 'production'
-        ? 'https://api.vasanthissignature.in'
+        ? (configService.get<string>('app.apiUrl') || 'https://api.vasanthicreations.in')
         : `http://localhost:${configService.get<number>('app.port', 4000)}`,
     )
     .addBearerAuth(

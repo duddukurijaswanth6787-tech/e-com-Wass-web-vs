@@ -89,17 +89,17 @@ const nextConfig: NextConfig = {
       },
       {
         protocol: "https",
-        hostname: "api.vasanthissignature.in",
+        hostname: "api.vasanthicreations.in",
         pathname: "/**",
       },
       {
         protocol: "https",
-        hostname: "vasanthissignature.in",
+        hostname: "vasanthicreations.in",
         pathname: "/**",
       },
       {
         protocol: "https",
-        hostname: "**.vasanthissignature.in",
+        hostname: "**.vasanthicreations.in",
         pathname: "/**",
       },
     ],

@@ -40,7 +40,7 @@ export default function SubscriptionAdminPage() {
   const loadDynamicSubscriptionData = async () => {
     setLoading(true);
     try {
-      const centralApiUrl = (typeof window !== 'undefined' && window.boutique?.apiUrl) || 'https://api.vasanthissignature.in';
+      const centralApiUrl = (typeof window !== 'undefined' && window.boutique?.apiUrl) || process.env.NEXT_PUBLIC_API_BASE_URL || 'https://api.vasanthicreations.in';
       const clientId = (typeof window !== 'undefined' && window.boutique?.clientId) || 'cl_hyd_vasanticreat_3ab4d8';
       const publicKey = (typeof window !== 'undefined' && window.boutique?.publicKey) || 'pk_live_52996adda36429e6aa48d824dbdf44ca';
 

@@ -145,7 +145,7 @@ export function StorefrontHeader() {
             <Link href="/" className="hidden lg:flex items-center shrink-0">
               <Image
                 src="/brand/logo-full.png"
-                alt="Vasanthi's Signature"
+                alt="Vasanthi Creations"
                 width={1400}
                 height={803}
                 priority
@@ -161,7 +161,7 @@ export function StorefrontHeader() {
           <Link href="/" className="lg:hidden flex items-center justify-center">
             <Image
               src="/brand/logo-full.png"
-              alt="Vasanthi's Signature"
+              alt="Vasanthi Creations"
               width={1400}
               height={803}
               priority
@@ -264,7 +264,7 @@ export function StorefrontHeader() {
                 <div className="flex items-center gap-2.5">
                   <Image
                     src="/brand/logo-full.png"
-                    alt="Vasanthi's Signature"
+                    alt="Vasanthi Creations"
                     width={1400}
                     height={803}
                     className="h-10 w-auto object-contain"

@@ -79,8 +79,8 @@ export default function TransactionalEmailAdminPage() {
     smtpSecure: false,
     smtpUser: '',
     smtpPassword: '',
-    fromAddress: 'orders@vasanthissignature.in',
-    fromName: "Vasanthi's Signature",
+    fromAddress: 'orders@vasanthicreations.in',
+    fromName: 'Vasanthi Creations',
     enableOrderConfirmation: true,
     enableInvoicePdf: true,
   });
@@ -112,8 +112,8 @@ export default function TransactionalEmailAdminPage() {
         smtpPort: configData.smtpPort || 587,
         smtpSecure: configData.smtpSecure ?? false,
         smtpUser: configData.smtpUser || '',
-        fromAddress: configData.fromAddress || 'orders@vasanthissignature.in',
-        fromName: configData.fromName || "Vasanthi's Signature",
+        fromAddress: configData.fromAddress || 'orders@vasanthicreations.in',
+        fromName: configData.fromName || 'Vasanthi Creations',
         enableOrderConfirmation: configData.enableOrderConfirmation ?? true,
         enableInvoicePdf: configData.enableInvoicePdf ?? true,
       }));
@@ -181,7 +181,7 @@ export default function TransactionalEmailAdminPage() {
           </div>
           <h1 className="text-2xl font-bold font-serif">Amazon SES / SendGrid Domain Gateway</h1>
           <p className="text-xs text-sky-100/90 leading-relaxed">
-            Configure automated order confirmation emails, branded Tax Invoices (PDF/HTML), customer welcome emails, and password resets from your custom domain (e.g. <span className="font-mono font-bold bg-white/20 px-1.5 py-0.5 rounded">orders@vasanthissignature.in</span>).
+            Configure automated order confirmation emails, branded Tax Invoices (PDF/HTML), customer welcome emails, and password resets from your custom domain (e.g. <span className="font-mono font-bold bg-white/20 px-1.5 py-0.5 rounded">orders@vasanthicreations.in</span>).
           </p>
         </div>
 
@@ -273,7 +273,7 @@ export default function TransactionalEmailAdminPage() {
                 <input
                   required
                   type="email"
-                  placeholder="orders@vasanthissignature.in"
+                  placeholder="orders@vasanthicreations.in"
                   value={form.fromAddress}
                   onChange={(e) => setForm({ ...form, fromAddress: e.target.value })}
                   className="w-full px-3.5 py-2.5 bg-neutral-50/50 border border-neutral-200 rounded-xl text-xs font-mono outline-none focus:border-[#0284c7] focus:bg-white"
@@ -286,7 +286,7 @@ export default function TransactionalEmailAdminPage() {
                 <input
                   required
                   type="text"
-                  placeholder="Vasanthi's Signature"
+                  placeholder="Vasanthi Creations"
                   value={form.fromName}
                   onChange={(e) => setForm({ ...form, fromName: e.target.value })}
                   className="w-full px-3.5 py-2.5 bg-neutral-50/50 border border-neutral-200 rounded-xl text-xs outline-none focus:border-[#0284c7] focus:bg-white"
@@ -442,7 +442,7 @@ export default function TransactionalEmailAdminPage() {
                 <input
                   required
                   type="email"
-                  placeholder="e.g. admin@vasanthissignature.in"
+                  placeholder="e.g. admin@vasanthicreations.in"
                   value={testEmail}
                   onChange={(e) => setTestEmail(e.target.value)}
                   className="w-full px-3.5 py-2 bg-neutral-50/50 border border-neutral-200 rounded-xl text-xs outline-none focus:border-[#0284c7] focus:bg-white"
@@ -468,7 +468,7 @@ export default function TransactionalEmailAdminPage() {
             </div>
             <ul className="text-[11px] text-sky-900/80 space-y-1.5 list-disc pl-4 leading-relaxed">
               <li>
-                <strong>Amazon SES:</strong> Verify your domain <span className="font-mono">vasanthissignature.in</span> in AWS SES console (DKIM & MX records).
+                <strong>Amazon SES:</strong> Verify your domain <span className="font-mono">vasanthicreations.in</span> in AWS SES console (DKIM & MX records).
               </li>
               <li>
                 <strong>SendGrid:</strong> Use Username <span className="font-mono">apikey</span> and paste your generated SG API Key as Password.

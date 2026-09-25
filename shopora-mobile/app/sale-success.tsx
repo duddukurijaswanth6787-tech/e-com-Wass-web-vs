@@ -13,7 +13,7 @@ import { PosMobileCartItem, PosMobileCustomer, getCurrentUser } from '../service
 import { bluetoothPrinterService } from '../services/bluetooth-printer';
 import { setGlobalCart } from './sale';
 
-const STORE_NAME = "VASANTHI'S SIGNATURE";
+const STORE_NAME = 'VASANTHI CREATIONS';
 const STORE_TAGLINE = 'Haute Couture & Boutique';
 const STORE_ADDRESS = 'Road No. 12, Banjara Hills, Hyderabad - 500034';
 const STORE_PHONE = '+91 98765 43210';

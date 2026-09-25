@@ -188,7 +188,7 @@ export function InstagramFeed() {
 
         return {
           id: String(prod.id || pRecord.productId || `prod-${i}`),
-          name: String(pRecord.label || prod.name || prod.title || "Vasanthi's Signature Exclusive"),
+          name: String(pRecord.label || prod.name || prod.title || 'Vasanthi Creations Exclusive'),
           price: salePriceNum > 0 ? salePriceNum : basePriceNum,
           originalPrice: basePriceNum > 0 ? basePriceNum : salePriceNum,
           discount: discountStr,
@@ -208,13 +208,13 @@ export function InstagramFeed() {
 
     return {
       id: post.id,
-      title: post.caption?.slice(0, 30) || "Vasanthi's Signature",
+      title: post.caption?.slice(0, 30) || 'Vasanthi Creations',
       posterImage,
       videoUrl,
-      accountName: "Vasanthi's Signature",
-      accountAvatar: 'VS',
-      caption: post.caption || "Vasanthi's Signature Festive Collection",
-      audioTrack: "Original Audio - Vasanthi's Signature",
+      accountName: 'Vasanthi Creations',
+      accountAvatar: 'VC',
+      caption: post.caption || 'Vasanthi Creations Festive Collection',
+      audioTrack: 'Original Audio - Vasanthi Creations',
       likes: `${post.likeCount || 0}`,
       comments: `${post.commentCount || 0}`,
       shares: `${post.shareCount || 0}`,

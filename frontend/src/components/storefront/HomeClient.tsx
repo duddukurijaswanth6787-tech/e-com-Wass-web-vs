@@ -92,7 +92,7 @@ export function HomeClient() {
     );
     return {
       id: String(p.id || ''),
-      brand: String(p.brandName || p.brand || "Vasanthi's Signature"),
+      brand: String(p.brandName || p.brand || 'Vasanthi Creations'),
       title: String(p.name || p.title || 'Product'),
       price,
       originalPrice: origPrice,

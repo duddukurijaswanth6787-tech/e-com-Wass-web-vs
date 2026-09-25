@@ -78,7 +78,7 @@ function ProductCardItem({
   const cardTitle = product.title || String(p.name || '') || 'Product';
   const priceVal = Number(product.price ?? p.salePrice ?? p.basePrice ?? 0);
   const origVal = Number(product.originalPrice ?? p.compareAtPrice ?? p.basePrice ?? 0);
-  const brandName = String(product.brand || p.brandName || "VASANTHI'S SIGNATURE");
+  const brandName = String(product.brand || p.brandName || "VASANTHI CREATIONS");
   const discountPct = origVal > priceVal ? Math.round(((origVal - priceVal) / origVal) * 100) : 0;
 
   return (

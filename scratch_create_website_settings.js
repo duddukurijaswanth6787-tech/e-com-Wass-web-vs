@@ -1,8 +1,7 @@
 const { Client } = require('pg');
 
 const client = new Client({
-  connectionString: 'postgresql://postgres:UmAGPwHEyraVlnXxcZgFGdljetlkyEFL@nozomi.proxy.rlwy.net:16688/railway',
-  ssl: { rejectUnauthorized: false }
+  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/vasanthi_creations?schema=public',
 });
 
 async function main() {
@@ -12,11 +11,11 @@ async function main() {
   await client.query(`
     CREATE TABLE IF NOT EXISTS "website_settings" (
       "id" TEXT NOT NULL,
-      "storeName" TEXT NOT NULL DEFAULT 'Vasanthi''s Signature',
+      "storeName" TEXT NOT NULL DEFAULT 'Vasanthi Creations',
       "storeDescription" TEXT DEFAULT 'Luxury Ethnic Wear & Couture',
       "logo" TEXT,
       "favicon" TEXT,
-      "supportEmail" TEXT DEFAULT 'contact@vasanthissignature.in',
+      "supportEmail" TEXT DEFAULT 'contact@vasanthicreations.in',
       "supportPhone" TEXT DEFAULT '+91 7659034198',
       "whatsappNumber" TEXT DEFAULT '+91 7659034198',
       "supportHours" TEXT DEFAULT '10:00 AM - 9:00 PM',
@@ -24,9 +23,9 @@ async function main() {
       "currency" TEXT NOT NULL DEFAULT 'INR',
       "timezone" TEXT NOT NULL DEFAULT 'Asia/Kolkata',
       "language" TEXT NOT NULL DEFAULT 'en',
-      "copyrightText" TEXT DEFAULT '© 2026 Vasanthi''s Signature. All Rights Reserved.',
+      "copyrightText" TEXT DEFAULT '© 2026 Vasanthi Creations. All Rights Reserved.',
       "maintenanceMode" BOOLEAN NOT NULL DEFAULT false,
-      "metaTitle" TEXT DEFAULT 'Vasanthi''s Signature - Luxury Couture',
+      "metaTitle" TEXT DEFAULT 'Vasanthi Creations - Luxury Couture',
       "metaDescription" TEXT,
       "metaKeywords" TEXT,
       "companyGstin" TEXT DEFAULT '36AABCU9603R1ZM',
@@ -47,7 +46,7 @@ async function main() {
     const id = crypto.randomUUID();
     await client.query(`
       INSERT INTO "website_settings" ("id", "storeName", "supportPhone", "supportEmail", "companyAddress", "companyCity", "companyState", "companyPincode", "companyGstin")
-      VALUES ($1, 'Vasanthi''s Signature', '+91 7659034198', 'contact@vasanthissignature.in', 'VASANTHI CREATIONS PVT LTD 2-1-156/3 Ashoknagar main road, Manuguru, Telangana - 507117', 'Manuguru', 'Telangana', '507117', '36AABCU9603R1ZM')
+      VALUES ($1, 'Vasanthi Creations', '+91 7659034198', 'contact@vasanthicreations.in', 'VASANTHI CREATIONS PVT LTD 2-1-156/3 Ashoknagar main road, Manuguru, Telangana - 507117', 'Manuguru', 'Telangana', '507117', '36AABCU9603R1ZM')
     `, [id]);
     console.log('✔ Inserted default website_settings row.');
   } else {

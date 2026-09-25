@@ -112,7 +112,7 @@ function getShippingDemos(): ShippingDemoItem[] {
         pincode: '560038',
         routingHub: 'BLR/IND/560038',
         weightGrams: 650,
-        sellerName: "Vasanthi's Signature",
+        sellerName: 'Vasanthi Creations',
         sellerAddress: 'Plot 42, Jubilee Hills Rd No 36, Hyderabad, TS - 500033',
         sellerGst: '36AABCU9603R1ZM',
         itemsSummary: 'Emerald Silk Lehenga Set (Size: M)',
@@ -135,7 +135,7 @@ function getShippingDemos(): ShippingDemoItem[] {
         pincode: '500034',
         routingHub: 'HYD/BNJ/500034',
         weightGrams: 500,
-        sellerName: "Vasanthi's Signature",
+        sellerName: 'Vasanthi Creations',
         sellerAddress: 'Plot 42, Jubilee Hills Rd No 36, Hyderabad, TS - 500033',
         sellerGst: '36AABCU9603R1ZM',
         itemsSummary: 'Banarasi Handloom Silk Suit (Red-Gold)',
@@ -181,7 +181,7 @@ function getReceiptDemos(): ReceiptDemoItem[] {
       id: 'rec-1',
       name: 'Standard POS Sale (80mm / 3-Item Slip)',
       data: {
-        storeName: "VASANTHI'S SIGNATURE",
+        storeName: 'VASANTHI CREATIONS',
         storeTagline: "Women's Ethnic Wear & Designer Couture",
         address: 'Plot 42, Jubilee Hills Rd No 36, Hyd - 500033\nGSTIN: 36AABCU9603R1ZM',
         phone: '+91 98765 43210',
@@ -207,7 +207,7 @@ function getReceiptDemos(): ReceiptDemoItem[] {
       id: 'rec-2',
       name: 'Express 58mm Mini Slip (Single Item)',
       data: {
-        storeName: "VASANTHI'S SIGNATURE",
+        storeName: 'VASANTHI CREATIONS',
         storeTagline: 'Boutique Store',
         address: 'Jubilee Hills, Hyderabad\nGSTIN: 36AABCU9603R1ZM',
         phone: '+91 98765 43210',
@@ -360,7 +360,7 @@ GSTIN: ${d.sellerGst}
       } else if (activeTab === 'BARCODE') {
         const item = BARCODE_DEMOS[selectedBarcodeIdx];
         const text = `=============================
-VASANTHI'S SIGNATURE
+VASANTHI CREATIONS
 ${item.productName}
 ${item.variant}
 SKU: ${item.sku}
@@ -398,7 +398,7 @@ Thank You For Shopping With Us!`;
         const invNumber = getLiveOrderNumber('ONL', '0012').replace('ORD-ONL-', 'INV-');
         const text = `========================================================
 TAX INVOICE (RULE 46 OF CGST RULES, 2017)
-VASANTHI'S SIGNATURE BOUTIQUE & DESIGNER FASHION
+VASANTHI CREATIONS BOUTIQUE & DESIGNER FASHION
 Plot 42, Road No 36, Jubilee Hills, Hyderabad - 500033
 GSTIN: 36AABCU9603R1ZM | State: 36-Telangana
 --------------------------------------------------------
@@ -415,7 +415,7 @@ ITEMS:
 1. Emerald Silk Lehenga Set | HSN: 6204 | Qty: 1 | Taxable: Rs.4,380.00 | IGST (5%): Rs.219.00 | Total: Rs.4,599.00
 --------------------------------------------------------
 Grand Total (in words): Rupees Four Thousand Five Hundred Ninety-Nine Only
-Authorized Signatory: For Vasanthi's Signature
+Authorized Signatory: For Vasanthi Creations
 ========================================================`;
         await Share.share({ title: 'A4 GST Tax Invoice', message: text });
       }
@@ -664,7 +664,7 @@ Authorized Signatory: For Vasanthi's Signature
             {/* Visual Sticker Preview */}
             <Text style={styles.previewHeader}>STICKER PREVIEW ({barcodeSize}):</Text>
             <View style={[styles.stickerPaperPreview, barcodeSize === 'LARGE' ? { minHeight: 180 } : barcodeSize === 'MEDIUM' ? { minHeight: 140 } : { minHeight: 110 }]}>
-              <Text style={styles.stickerStoreTitle}>VASANTHI'S SIGNATURE</Text>
+              <Text style={styles.stickerStoreTitle}>VASANTHI CREATIONS</Text>
               <Text style={styles.stickerProdName}>{curBarcode.productName}</Text>
               <Text style={styles.stickerVariant}>{curBarcode.variant}</Text>
               <Text style={styles.stickerSku}>SKU: {curBarcode.sku}</Text>
@@ -803,7 +803,7 @@ Authorized Signatory: For Vasanthi's Signature
 
               <View style={styles.receiptDivider} />
               <Text style={styles.receiptFooter}>❖ THANK YOU FOR SHOPPING WITH US! ❖</Text>
-              <Text style={styles.receiptFooterSub}>Visit again &bull; vasanthissignature.in</Text>
+              <Text style={styles.receiptFooterSub}>Visit again &bull; vasanthicreations.in</Text>
             </View>
 
             {/* Hardware Recommendation */}
@@ -832,7 +832,7 @@ Authorized Signatory: For Vasanthi's Signature
             <View style={styles.a4PaperPreview}>
               <View style={styles.a4TopRow}>
                 <View>
-                  <Text style={styles.a4StoreName}>VASANTHI'S SIGNATURE</Text>
+                  <Text style={styles.a4StoreName}>VASANTHI CREATIONS</Text>
                   <Text style={styles.a4StoreSub}>Women's Ethnic Wear & Designer Fashion</Text>
                   <Text style={styles.a4StoreAddr}>Plot 42, Jubilee Hills Rd No 36, Hyderabad, TS - 500033</Text>
                   <Text style={styles.a4Gst}>GSTIN: 36AABCU9603R1ZM</Text>

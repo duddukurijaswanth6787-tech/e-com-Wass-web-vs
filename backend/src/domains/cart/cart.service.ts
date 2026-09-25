@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { BusinessException } from '@common/exceptions';
 import { AuditService } from '@domains/audit/audit.service';
 import { CartRepository } from './cart.repository';
@@ -25,6 +26,7 @@ export class CartService {
     private readonly auditService: AuditService,
     private readonly prisma: PrismaService,
     private readonly notificationService: NotificationService,
+    private readonly configService: ConfigService,
   ) {}
 
   private toCartItemResponse(item: any): CartItemResponse {
@@ -606,7 +608,7 @@ export class CartService {
         abandonedDurationFormatted: durationFormatted,
         recoveryStatus: 'PENDING',
         suggestedDiscountCode: 'COMEBACK10',
-        checkoutResumeUrl: `https://vasanthissignature.in/cart?resume=${c.id}&coupon=COMEBACK10`,
+        checkoutResumeUrl: `${this.configService.get<string>('app.frontendUrl') || 'https://vasanthicreations.in'}/cart?resume=${c.id}&coupon=COMEBACK10`,
       };
     });
 
@@ -675,11 +677,15 @@ export class CartService {
         ? `"${firstItemName}" and ${moreCount} other item(s)`
         : `"${firstItemName}"`;
 
+    const frontendUrl =
+      this.configService.get<string>('app.frontendUrl') ||
+      'https://vasanthicreations.in';
+
     const message =
       dto?.customMessage ||
-      `Hi ${custName}! You left ${itemDesc} in your shopping bag at Vasanthi's Signature. Complete your order now and enjoy ${discountPercent}% OFF with voucher code ${discountCode}!`;
+      `Hi ${custName}! You left ${itemDesc} in your shopping bag at Vasanthi Creations. Complete your order now and enjoy ${discountPercent}% OFF with voucher code ${discountCode}!`;
 
-    const checkoutUrl = `https://vasanthissignature.in/cart?resume=${cart.id}&coupon=${discountCode}`;
+    const checkoutUrl = `${frontendUrl}/cart?resume=${cart.id}&coupon=${discountCode}`;
 
     // Send in-app notification if customer user is registered
     if (custUser?.id) {

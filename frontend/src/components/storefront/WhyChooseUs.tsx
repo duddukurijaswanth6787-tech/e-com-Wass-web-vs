@@ -24,7 +24,7 @@ export function WhyChooseUs() {
     {
       icon: Users,
       question: 'Trusted by 10,000+ Happy Customers',
-      answer: "Over 10,000+ satisfied buyers across India and worldwide who trust Vasanthi's Signature for authentic, premium ethnic fashion and reliable doorstep delivery.",
+      answer: "Over 10,000+ satisfied buyers across India and worldwide who trust Vasanthi Creations for authentic, premium ethnic fashion and reliable doorstep delivery.",
     },
     {
       icon: HeartHandshake,
@@ -43,7 +43,7 @@ export function WhyChooseUs() {
       {/* Section Header */}
       <div className="text-center space-y-1 mb-5 sm:mb-8">
         <h2 className="text-lg sm:text-3xl font-bold font-serif text-neutral-900 tracking-tight">
-          Why Choose Vasanthi&apos;s Signature?
+          Why Choose Vasanthi Creations?
         </h2>
         <p className="text-xs sm:text-sm text-neutral-500 font-medium max-w-lg mx-auto">
           Our commitment to quality, authenticity, and heritage luxury
