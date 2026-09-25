@@ -54,7 +54,9 @@ export default registerAs('app', () => ({
     eventLogEnabled: process.env.SECURITY_EVENT_LOG_ENABLED !== 'false',
   },
   storage: {
-    provider: process.env.STORAGE_PROVIDER || 'local',
+    provider:
+      process.env.STORAGE_PROVIDER ||
+      (process.env.AWS_S3_BUCKET || process.env.AWS_BUCKET_NAME ? 's3' : 'local'),
     maxFileSize: parseInt(process.env.STORAGE_MAX_FILE_SIZE || '10485760', 10),
     allowedMimeTypes:
       process.env.STORAGE_ALLOWED_MIME_TYPES ||

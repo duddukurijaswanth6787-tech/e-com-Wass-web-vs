@@ -21,14 +21,13 @@ import { StorageServeController } from './storage-serve.controller';
       ) => {
         const provider = configService.get<string>(
           'app.storage.provider',
-          'local',
+          's3',
         );
-        const env = configService.get<string>('app.env', 'development');
-        // ponytail: production always uses S3, dev can use local
-        if (env === 'production' && provider !== 's3') {
-          throw new Error('STORAGE_PROVIDER must be "s3" in production');
+        const bucket = configService.get<string>('app.storage.s3.bucket', '');
+        if (provider === 's3' || bucket) {
+          return s3Provider;
         }
-        return provider === 's3' ? s3Provider : localProvider;
+        return localProvider;
       },
       inject: [ConfigService, LocalStorageProvider, S3StorageProvider],
     },
