@@ -11,7 +11,7 @@ export default async function Home() {
   const queryClient = new QueryClient();
 
   const fetchProducts = async (query: ProductQueryDto) => {
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL;
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://boutique-api-production-d010.up.railway.app/api/v1';
     if (!apiBase) {
       return { data: [], total: 0, items: [] };
     }
@@ -31,7 +31,7 @@ export default async function Home() {
   };
 
   const fetchFeaturedCategories = async () => {
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL;
+    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://boutique-api-production-d010.up.railway.app/api/v1';
     if (!apiBase) {
       return [];
     }

@@ -124,7 +124,7 @@ const nextConfig: NextConfig = {
     return [
       {
         source: '/api/v1/:path*',
-        destination: `${process.env.BACKEND_INTERNAL_URL || 'http://127.0.0.1:4000'}/api/v1/:path*`,
+        destination: `${process.env.BACKEND_INTERNAL_URL || 'https://boutique-api-production-d010.up.railway.app'}/api/v1/:path*`,
       },
     ];
   },

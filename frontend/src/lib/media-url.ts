@@ -13,9 +13,9 @@ function getBackendOrigin(): string {
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
       return 'http://localhost:4000';
     }
-    return '';
+    return 'https://boutique-api-production-d010.up.railway.app';
   }
-  return '';
+  return 'https://boutique-api-production-d010.up.railway.app';
 }
 
 export function resolveMediaUrl(url?: string | null): string {

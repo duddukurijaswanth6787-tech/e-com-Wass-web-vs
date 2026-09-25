@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/react-query';
 
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://boutique-api-production-d010.up.railway.app/api/v1';
 
 // ponytail: inline keys to avoid importing from 'use client' module
 // NOTE: these MUST exactly match the queryKey used by the real client-side
