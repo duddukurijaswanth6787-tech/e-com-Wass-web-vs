@@ -28,25 +28,25 @@ const geistMono = Geist_Mono({
 export const siteOpenGraph = {
   type: "website" as const,
   locale: "en_IN",
-  siteName: "VSWAAS Boutique",
-  title: "VSWAAS | Premium Boutique & Designer Fashion",
-  description: "Official Online Store for VSWAAS Boutique - Premium women's ethnic wear, designer fashion, and handcrafted collections.",
+  siteName: "Vasanti Creations",
+  title: "Vasanti Creations | Premium Boutique & Designer Fashion",
+  description: "Official Online Store for Vasanti Creations - Premium women's ethnic wear, designer fashion, and handcrafted collections.",
   images: ["/brand/logo-full.png"],
 };
 
 export const metadata: Metadata = {
   title: {
-    default: "VSWAAS | Premium Boutique & Designer Fashion",
-    template: "%s | VSWAAS",
+    default: "Vasanti Creations | Premium Boutique & Designer Fashion",
+    template: "%s | Vasanti Creations",
   },
-  description: "Official Online Store for VSWAAS Boutique - Premium ethnic wear, designer fashion, and handcrafted collections.",
+  description: "Official Online Store for Vasanti Creations - Premium ethnic wear, designer fashion, and handcrafted collections.",
   openGraph: {
     ...siteOpenGraph,
   },
   twitter: {
     card: "summary_large_image",
-    title: "VSWAAS | Luxury Ethnic Wear & Designer Outfits",
-    description: "Official Online Store for VSWAAS Boutique",
+    title: "Vasanti Creations | Luxury Ethnic Wear & Designer Outfits",
+    description: "Official Online Store for Vasanti Creations",
     images: ["/brand/logo-full.png"],
   },
   robots: {
@@ -86,8 +86,8 @@ export default async function RootLayout({
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "WebSite",
-    "name": "VSWAAS Boutique",
-    "url": "https://vswaas-web.vercel.app",
+    "name": "Vasanti Creations",
+    "url": "https://vasanthicreations.in",
   };
 
   return (
