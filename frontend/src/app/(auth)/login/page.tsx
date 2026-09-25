@@ -122,32 +122,6 @@ function CustomerLoginForm() {
     setIsLoading(true);
     try {
       const cleanIdentifier = email.trim();
-      
-      // If logging in as Store Admin with Master credentials
-      if (
-        (cleanIdentifier === 'admin' || cleanIdentifier === 'admin@vasanthi.com') &&
-        (password === 'StorePassword@123' || password === 'Admin@123')
-      ) {
-        const mockAdminProfile = {
-          id: 'admin-super-id',
-          email: 'admin@vasanthi.com',
-          firstName: 'Store',
-          lastName: 'Admin',
-          userType: 'ADMIN',
-          accountStatus: 'ACTIVE',
-          roles: ['super_admin', 'admin'],
-          permissions: ['*'],
-        };
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('vd_access_token', 'store-admin-session-token');
-          localStorage.setItem('vd_cached_user', JSON.stringify(mockAdminProfile));
-          localStorage.setItem('boutique_admin_token', 'admin-auth-token');
-          localStorage.setItem('boutique_admin_user', 'admin');
-        }
-        window.location.assign('/admin/dashboard');
-        return;
-      }
-
       await login({ email: cleanIdentifier, password });
       const profileResult = (await refetchUser()) as { data?: { roles?: string[] } | null };
       redirectAfterLogin(profileResult?.data);

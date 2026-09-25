@@ -23,8 +23,8 @@ export function BoutiqueSdkLoader() {
         try {
           const initFn = (window as any).BoutiqueSDK.init;
           const config = {
-            clientId: 'cl_hyd_vasanticreat_3ab4d8',
-            publicKey: 'pk_live_52996adda36429e6aa48d824dbdf44ca',
+            clientId: process.env.NEXT_PUBLIC_BOUTIQUE_CLIENT_ID || 'cl_hyd_vasanticreat_3ab4d8',
+            publicKey: process.env.NEXT_PUBLIC_BOUTIQUE_PUBLIC_KEY || 'pk_live_52996adda36429e6aa48d824dbdf44ca',
             apiUrl: apiUrl,
             whatsappNumber: '919876543210',
             debug: true,
