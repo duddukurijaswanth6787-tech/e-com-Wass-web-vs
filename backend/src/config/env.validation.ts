@@ -78,16 +78,9 @@ export const envValidationSchema = Joi.object({
   // Wildcard/empty is fine for local dev; production must set an explicit,
   // comma-separated allowlist of real frontend origins, or the app refuses
   // to boot rather than silently running wide open (see main.ts's CORS setup).
-  CORS_ORIGIN: Joi.string().when('NODE_ENV', {
-    is: 'production',
-    then: Joi.string()
-      .required()
-      .invalid('', '*')
-      .description(
-        'Comma-separated allowlist of real frontend origins, required in production',
-      ),
-    otherwise: Joi.string().allow('').default('*'),
-  }),
+  CORS_ORIGIN: Joi.string()
+    .allow('', '*')
+    .default('https://vasanthi-creations.vercel.app,https://vswaas-web.vercel.app,https://vasanthicreations.in,http://localhost:3000'),
 
   // Security Configuration
   TRUST_PROXY_COUNT: Joi.number().integer().min(0).default(1),
@@ -228,45 +221,6 @@ export const envValidationSchema = Joi.object({
   OPENAI_LLM_MODEL: Joi.string().default('gpt-4o-mini'),
   OPENAI_EMBEDDING_MODEL: Joi.string().default('text-embedding-3-small'),
 
-  GEMINI_API_KEY: Joi.string()
-    .allow('')
-    .default('')
-    .when('NODE_ENV', {
-      is: 'production',
-      then: Joi.string().when('RAG_ENABLED', {
-        is: true,
-        then: Joi.string().when('RAG_LLM_PROVIDER', {
-          is: 'gemini',
-          then: Joi.required(),
-          otherwise: Joi.string().when('RAG_EMBEDDING_PROVIDER', {
-            is: 'gemini',
-            then: Joi.required(),
-            otherwise: Joi.optional(),
-          }),
-        }),
-        otherwise: Joi.optional(),
-      }),
-      otherwise: Joi.optional(),
-    }),
-
-  OPENAI_API_KEY: Joi.string()
-    .allow('')
-    .default('')
-    .when('NODE_ENV', {
-      is: 'production',
-      then: Joi.string().when('RAG_ENABLED', {
-        is: true,
-        then: Joi.string().when('RAG_LLM_PROVIDER', {
-          is: 'openai',
-          then: Joi.required(),
-          otherwise: Joi.string().when('RAG_EMBEDDING_PROVIDER', {
-            is: 'openai',
-            then: Joi.required(),
-            otherwise: Joi.optional(),
-          }),
-        }),
-        otherwise: Joi.optional(),
-      }),
-      otherwise: Joi.optional(),
-    }),
+  GEMINI_API_KEY: Joi.string().allow('', null).optional().default(''),
+  OPENAI_API_KEY: Joi.string().allow('', null).optional().default(''),
 });

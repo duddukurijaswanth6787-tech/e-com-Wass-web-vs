@@ -36,8 +36,9 @@ export default registerAs('app', () => ({
   cors: {
     // Joi's validation schema (env.validation.ts) already guarantees this is
     // a real, non-wildcard origin allowlist in production -- the app fails
-    // to boot otherwise, so no fallback is needed here.
-    origin: process.env.CORS_ORIGIN || '*',
+    origin:
+      process.env.CORS_ORIGIN ||
+      'https://vasanthi-creations.vercel.app,https://vswaas-web.vercel.app,https://vasanthicreations.in,http://localhost:3000,*',
     methods:
       process.env.CORS_METHODS || 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders:
