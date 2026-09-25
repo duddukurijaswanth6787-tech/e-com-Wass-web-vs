@@ -90,6 +90,7 @@ import { QuotationModule } from '@domains/quotation/quotation.module';
 import { AnalyticsModule } from '@domains/analytics/analytics.module';
 import { AwsBillingModule } from '@domains/aws-billing/aws-billing.module';
 import { TelegramModule } from '@domains/telegram/telegram.module';
+import { ClientSaaSModule } from '../domains/client-saas/client-saas.module';
 
 /**
  * Root Application Module coordinates core global services (config, database, caching, health, queues).
@@ -236,6 +237,7 @@ import { TelegramModule } from '@domains/telegram/telegram.module';
     AwsBillingModule,
     AnalyticsModule,
     TelegramModule,
+    ClientSaaSModule,
   ],
   controllers: [AppController],
   providers: [

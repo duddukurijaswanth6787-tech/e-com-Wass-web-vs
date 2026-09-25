@@ -2,6 +2,8 @@ console.log(
   '[STARTUP] Executing main.ts module script v1.0.3 (Omnichannel & Barcode Patch Active)...',
 );
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -136,8 +138,24 @@ async function bootstrap() {
   });
   app.use('/favicon.ico', (_req: any, res: any) => res.status(204).end());
 
+  app.use('/sdk/v1/boutique-sdk.min.js', (_req: any, res: any) => {
+    const candidates = [
+      path.join(process.cwd(), 'public/sdk/v1/boutique-sdk.min.js'),
+      path.join(__dirname, '../public/sdk/v1/boutique-sdk.min.js'),
+      path.join(__dirname, '../../public/sdk/v1/boutique-sdk.min.js'),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) {
+        res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        return res.sendFile(p);
+      }
+    }
+    res.status(404).send('// Boutique SDK file not found');
+  });
+
   app.setGlobalPrefix('api/v1', {
-    exclude: ['/', 'health', 'api/docs'],
+    exclude: ['/', 'health', 'api/docs', 'sdk/v1/boutique-sdk.min.js'],
   });
 
   app.enableShutdownHooks();
