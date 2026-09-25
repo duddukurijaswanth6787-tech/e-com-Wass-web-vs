@@ -33,6 +33,7 @@ export async function fetchThemeCss(): Promise<string> {
   try {
     const res = await fetch(`${baseUrl}/storefront/theme`, {
       next: { revalidate: 60 },
+      signal: AbortSignal.timeout(2000),
     });
     if (!res.ok) return '';
     const body = await res.json();

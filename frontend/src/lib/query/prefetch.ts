@@ -28,7 +28,10 @@ async function apiFetch<T>(path: string): Promise<T> {
     return null as T;
   }
   try {
-    const res = await fetch(`${API}${path}`, { cache: 'no-store' });
+    const res = await fetch(`${API}${path}`, { 
+      cache: 'no-store',
+      signal: AbortSignal.timeout(2000),
+    });
     if (!res.ok) {
       return null as T;
     }
