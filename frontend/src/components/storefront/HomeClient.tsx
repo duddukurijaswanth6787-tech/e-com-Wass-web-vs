@@ -11,6 +11,7 @@ import { CategoryCircles } from '@/components/storefront/CategoryCircles'; // Se
 import { PromoBannersSection } from '@/components/storefront/PromoBannersSection'; // Section 03.5: Mobile Promo Banners
 import { ProductGridSection } from '@/components/storefront/ProductGridSection'; // Section 04: New Arrivals
 import { FeaturedCollections } from '@/components/storefront/FeaturedCollections'; // Section 06
+import { BoutiqueGallery } from '@/components/storefront/BoutiqueGallery'; // Boutique WaaS Dynamic Gallery
 import { TestimonialsSection } from '@/components/storefront/TestimonialsSection'; // Section 07
 import { InstagramFeed } from '@/components/storefront/InstagramFeed'; // Section 08
 import { WhyChooseUs } from '@/components/storefront/WhyChooseUs'; // Section 09
@@ -138,6 +139,9 @@ export function HomeClient() {
 
         {/* 05 COLLECTIONS BANNER */}
         {isSectionEnabled('collections') && <FeaturedCollections />}
+
+        {/* 05.5 BOUTIQUE WAAS DYNAMIC GALLERY */}
+        <BoutiqueGallery />
 
         {/* 06 TESTIMONIALS */}
         {isSectionEnabled('customer_reviews') && <TestimonialsSection />}
