@@ -121,7 +121,10 @@ function CustomerLoginForm() {
     setError('');
     setIsLoading(true);
     try {
-      const cleanIdentifier = email.trim();
+      let cleanIdentifier = email.trim();
+      if (cleanIdentifier === 'admin') {
+        cleanIdentifier = 'admin@vasanthi.com';
+      }
       await login({ email: cleanIdentifier, password });
       const profileResult = (await refetchUser()) as { data?: { roles?: string[] } | null };
       redirectAfterLogin(profileResult?.data);

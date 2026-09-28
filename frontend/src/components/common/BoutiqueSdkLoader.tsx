@@ -19,26 +19,27 @@ export function BoutiqueSdkLoader() {
     script.async = true;
 
     script.onload = () => {
-      if ((window as any).BoutiqueSDK) {
-        try {
-          const initFn = (window as any).BoutiqueSDK.init;
+      try {
+        const SDKClass = (window as any).BoutiqueSDK || (window as any).EcomSDK;
+        if (SDKClass) {
           const config = {
             clientId: process.env.NEXT_PUBLIC_BOUTIQUE_CLIENT_ID || 'cl_hyd_vasanticreat_3ab4d8',
             publicKey: process.env.NEXT_PUBLIC_BOUTIQUE_PUBLIC_KEY || 'pk_live_52996adda36429e6aa48d824dbdf44ca',
             apiUrl: apiUrl,
             whatsappNumber: '919876543210',
-            debug: true,
+            storeName: 'Vasanti Creations',
+            debug: false,
           };
 
-          if (typeof initFn === 'function') {
-            (window as any).boutique = initFn(config);
-          } else {
-            (window as any).boutique = new (window as any).BoutiqueSDK(config);
+          if (typeof SDKClass.init === 'function') {
+            (window as any).boutique = SDKClass.init(config);
+          } else if (typeof SDKClass === 'function') {
+            (window as any).boutique = new SDKClass(config);
           }
-          console.log('✅ [BoutiqueSDK] Live Gatekeeper connected to Railway!');
-        } catch (e) {
-          console.error('[BoutiqueSDK] Initialization error:', e);
+          console.log('✅ [BoutiqueSDK] Live Master SDK connected to Railway!');
         }
+      } catch (e) {
+        console.error('[BoutiqueSDK] Initialization error:', e);
       }
     };
 
